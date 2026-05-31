@@ -1,0 +1,72 @@
+# ── Python / Server ───────────────────────────────────────────────────────────
+server/.venv/
+server/__pycache__/
+server/**/__pycache__/
+server/**/*.pyc
+server/**/*.pyo
+server/.env                    # contains API keys — never commit
+server/docs/                   # generated PDF docs
+server/generate_docs.py        # doc generator script (optional to ignore)
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+
+# ── Storage / Case data ───────────────────────────────────────────────────────
+# The storage root (default D:\fig) is outside the repo; ignore if inside
+fig/
+storage/
+*.webm                         # session recordings
+*.pdf                          # generated reports (large)
+
+# ── Node / Web ────────────────────────────────────────────────────────────────
+web/node_modules/
+web/dist/
+web/.vite/
+web/.cache/
+*.tsbuildinfo
+
+# ── Android ───────────────────────────────────────────────────────────────────
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/keystore/*.jks
+android/keystore/*.keystore
+*.apk
+*.aab
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.vscode/settings.json          # keep .vscode/extensions.json if present
+.idea/
+*.suo
+*.user
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# ── Secrets / Keys ────────────────────────────────────────────────────────────
+*.env
+*.env.*
+!*.env.example
+*.pem
+*.key
+*.crt
+credentials.json
+service-account*.json
+
+# ── Logs / Temp ───────────────────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+~$*
+patch_auditor.py
+new_detail_func.txt
+
+# ── Compressed ────────────────────────────────────────────────────────────────
+*.zip
+*.tar.gz
+server.zip

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FI Agent</string>
+    <string name="start_fi">Start FI</string>
+    <string name="permission_rationale">FI session requires camera, microphone, location and storage access.</string>
+</resources>

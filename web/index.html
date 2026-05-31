@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0D47A1" />
+  <title>ABC Bank — Personal Loan</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SCREEN 1 · MARKETING
+     ══════════════════════════════════════════════════════════════ -->
+<div id="screenMarketing">
+
+  <!-- Nav -->
+  <nav class="bank-nav">
+    <div class="bank-logo">
+      <span class="logo-icon">🏦</span>
+      <span class="logo-text">ABC Bank</span>
+    </div>
+    <span class="nav-tag">Personal Loan</span>
+  </nav>
+
+  <!-- Hero -->
+  <div class="hero">
+    <div class="hero-badge">Instant Approval</div>
+    <h1 class="hero-title">Personal Loan<br>up to <span class="hero-amount">₹50 Lakh</span></h1>
+    <p  class="hero-sub">Lowest interest rates · Minimal documentation · Disbursed in 24 hours</p>
+    <button id="btnApply" class="btn btn-hero">Apply for Personal Loan</button>
+  </div>
+
+  <!-- Benefits -->
+  <div class="benefits-grid">
+    <div class="benefit-card">
+      <div class="benefit-icon">⚡</div>
+      <div class="benefit-title">Instant Decision</div>
+      <div class="benefit-desc">Automated digital verification in minutes</div>
+    </div>
+    <div class="benefit-card">
+      <div class="benefit-icon">🔒</div>
+      <div class="benefit-title">100% Secure</div>
+      <div class="benefit-desc">Bank-grade encryption, RBI compliant</div>
+    </div>
+    <div class="benefit-card">
+      <div class="benefit-icon">📄</div>
+      <div class="benefit-title">Minimal Docs</div>
+      <div class="benefit-desc">Just PAN + bank statement needed</div>
+    </div>
+    <div class="benefit-card">
+      <div class="benefit-icon">💰</div>
+      <div class="benefit-title">Best Rates</div>
+      <div class="benefit-desc">Starting from 10.5% per annum</div>
+    </div>
+  </div>
+
+  <!-- How it works -->
+  <div class="section-card">
+    <h2 class="section-title">How It Works</h2>
+    <div class="steps">
+      <div class="step"><span class="step-num">1</span><span class="step-text">Fill basic application form</span></div>
+      <div class="step"><span class="step-num">2</span><span class="step-text">Complete Field Investigation (5–10 min)</span></div>
+      <div class="step"><span class="step-num">3</span><span class="step-text">Automated verification &amp; credit assessment</span></div>
+      <div class="step"><span class="step-num">4</span><span class="step-text">Loan approved &amp; disbursed</span></div>
+    </div>
+  </div>
+
+  <p class="fine-print">
+    Subject to credit assessment. T&amp;C apply. ABC Bank is a regulated financial institution.
+    Loan disbursal subject to KYC and field verification.
+  </p>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════════════
+     SCREEN 2 · APPLICATION FORM
+     ══════════════════════════════════════════════════════════════ -->
+<div id="screenForm" class="hidden">
+
+  <nav class="bank-nav">
+    <button class="btn-back" id="btnBackToMarketing">← Back</button>
+    <div class="bank-logo"><span class="logo-icon">🏦</span><span class="logo-text">ABC Bank</span></div>
+    <span></span>
+  </nav>
+
+  <div class="form-container">
+    <h2 class="form-title">Personal Loan Application</h2>
+    <p  class="form-sub">Fill in your details — takes about 2 minutes</p>
+
+    <form id="loanForm" novalidate>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label" for="firstName">First Name <span class="req">*</span></label>
+          <input class="form-input" id="firstName" type="text"
+                 placeholder="e.g. Ramesh" autocomplete="given-name" required />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="lastName">Last Name <span class="req">*</span></label>
+          <input class="form-input" id="lastName" type="text"
+                 placeholder="e.g. Kumar" autocomplete="family-name" required />
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="dob">Date of Birth <span class="req">*</span></label>
+        <input class="form-input" id="dob" type="date" required />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="address">Residential Address <span class="req">*</span></label>
+        <textarea class="form-input form-textarea" id="address" rows="2"
+                  placeholder="House / Flat no., Street, Area" required></textarea>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label" for="city">City <span class="req">*</span></label>
+          <input class="form-input" id="city" type="text"
+                 placeholder="e.g. Mumbai" autocomplete="address-level2" required />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="panNumber">PAN Number <span class="req">*</span></label>
+          <input class="form-input" id="panNumber" type="text"
+                 placeholder="ABCDE1234F" maxlength="10"
+                 pattern="[A-Za-z]{5}[0-9]{4}[A-Za-z]" required />
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="mobileNumber">Mobile Number <span class="req">*</span></label>
+        <input class="form-input" id="mobileNumber" type="tel"
+               placeholder="10-digit mobile number" maxlength="10"
+               pattern="[6-9][0-9]{9}" autocomplete="tel" required />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="incomeRange">Annual Income Range <span class="req">*</span></label>
+        <select class="form-input form-select" id="incomeRange" required>
+          <option value="" disabled selected>Select your income range</option>
+          <option value="Under 2L">Under ₹2 Lakh</option>
+          <option value="2-5L">₹2 Lakh – ₹5 Lakh</option>
+          <option value="5-20L">₹5 Lakh – ₹20 Lakh</option>
+          <option value="21-100L">₹21 Lakh – ₹1 Crore</option>
+          <option value="1Cr+">₹1 Crore &amp; Above</option>
+        </select>
+      </div>
+
+      <p id="formError" class="error-msg hidden"></p>
+      <button type="submit" class="btn btn-primary btn-full">Review Application</button>
+    </form>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════════════
+     SCREEN 3 · REVIEW
+     ══════════════════════════════════════════════════════════════ -->
+<div id="screenReview" class="hidden">
+
+  <nav class="bank-nav">
+    <button class="btn-back" id="btnBackToForm">← Edit</button>
+    <div class="bank-logo"><span class="logo-icon">🏦</span><span class="logo-text">ABC Bank</span></div>
+    <span></span>
+  </nav>
+
+  <div class="form-container">
+    <h2 class="form-title">Review Your Details</h2>
+    <p  class="form-sub">Confirm the information before starting verification</p>
+
+    <div id="reviewTable" class="review-table"></div>
+
+    <div class="fi-info-card">
+      <div class="fi-info-title">📹 Field Investigation Process</div>
+      <ul class="fi-info-list">
+        <li>Agent asks 3 identity-verification questions (spoken answers)</li>
+        <li>Selfie + 7 home photos captured automatically</li>
+        <li>PAN card scanned &amp; verified with NSDL</li>
+        <li>Bank statement upload for income verification</li>
+        <li>Entire session recorded (audio + video)</li>
+        <li>Credit assessment report generated on submission</li>
+      </ul>
+      <p class="fi-info-note">Allow camera, microphone &amp; location access when prompted.</p>
+    </div>
+
+    <p id="reviewError" class="error-msg hidden"></p>
+    <button id="btnStartFI" class="btn btn-primary btn-full">Start Field Investigation</button>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════════════
+     SCREEN 4 · FI SESSION
+     ══════════════════════════════════════════════════════════════ -->
+<div id="session" class="hidden">
+
+  <!-- Full-screen camera preview -->
+  <video id="videoPreview" autoplay playsinline muted></video>
+
+  <!-- Photo review overlay -->
+  <img id="photoPreview" class="hidden" alt="captured photo" />
+
+  <!-- Photo review popup (shown during ReviewPhoto state) -->
+  <div id="photoReviewPopup" class="photo-popup hidden">
+    <div class="photo-popup-card">
+      <div class="photo-popup-header" id="popupHeader"></div>
+      <img id="popupImage" alt="Captured photo" />
+      <div class="photo-popup-geo" id="popupGeo"></div>
+      <div class="photo-popup-actions">
+        <button id="btnPopupDiscard" class="btn btn-discard">Discard</button>
+        <button id="btnPopupSave"    class="btn btn-save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Thank-you screen (shown after successful submit) -->
+  <div id="thankyou" class="thankyou hidden">
+    <div class="thankyou-card">
+      <div class="thankyou-icon">✅</div>
+      <h2 class="thankyou-title">Thank You!</h2>
+      <p  class="thankyou-body" id="thankyouBody"></p>
+      <div class="thankyou-ref" id="thankyouRef"></div>
+    </div>
+  </div>
+
+  <!-- Bottom overlay panel -->
+  <div id="overlay">
+    <p id="tvMessage"    class="msg-text"></p>
+    <p id="tvTranscript" class="transcript hidden"></p>
+    <div id="tvCountdown"    class="countdown hidden">5</div>
+    <div id="ivMicIndicator" class="mic-indicator hidden">🎙</div>
+
+    <div id="layoutReview" class="review-buttons hidden">
+      <button id="btnDiscard" class="btn btn-discard">Discard</button>
+      <button id="btnSave"    class="btn btn-save">Save</button>
+    </div>
+
+    <button id="btnSubmit" class="btn btn-primary btn-submit hidden">Submit FI Report</button>
+    <div    id="progressBar" class="progress hidden"></div>
+  </div>
+</div>
+
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>

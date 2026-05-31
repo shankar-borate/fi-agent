@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /d \"d:\\\\videocx\\\\trunk\\\\fi-agent\")",
+      "Bash(python -m pip install reportlab --quiet)",
+      "Bash(python docs/generate_docs.py)",
+      "Bash(New-Item -ItemType Directory -Force \"d:\\\\videocx\\\\trunk\\\\fi-agent\\\\android\\\\app\\\\src\\\\main\\\\res\\\\mipmap-anydpi-v26\")",
+      "Bash(Out-Null)",
+      "Bash(New-Item -ItemType Directory -Force \"d:\\\\videocx\\\\trunk\\\\fi-agent\\\\android\\\\app\\\\src\\\\main\\\\res\\\\drawable\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"d:\\\\videocx\\\\trunk\\\\fi-agent\\\\android\\\\app\\\\src\\\\main\\\\res\\\\mipmap-anydpi-v26\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"d:\\\\videocx\\\\trunk\\\\fi-agent\\\\android\\\\app\\\\src\\\\main\\\\res\\\\drawable\")"
+    ]
+  }
+}
