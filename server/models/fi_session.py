@@ -10,14 +10,15 @@ class GeoPoint(BaseModel):
 
 
 class BasicInfo(BaseModel):
-    first_name:    str = ""
-    last_name:     str = ""
-    dob:           str = ""   # ISO date string
-    address:       str = ""
-    city:          str = ""
-    pan_number:    str = ""
-    mobile_number: str = ""
-    income_range:  str = ""   # e.g. "5-20L"
+    first_name:    str   = ""
+    last_name:     str   = ""
+    dob:           str   = ""   # ISO date string
+    address:       str   = ""
+    city:          str   = ""
+    pan_number:    str   = ""
+    mobile_number: str   = ""
+    income_range:  str   = ""   # e.g. "5-20L"
+    loan_amount:   float = 0.0  # in INR
 
 
 class QuestionAnswer(BaseModel):

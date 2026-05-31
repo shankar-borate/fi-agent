@@ -12,9 +12,31 @@ Sections:
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+# Indian Standard Time = UTC + 5:30
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _ist(dt_str: str, fmt: str = "%d %b %Y, %H:%M IST") -> str:
+    """Convert a UTC ISO-8601 string to a human-readable IST string."""
+    if not dt_str:
+        return "—"
+    try:
+        clean = dt_str.strip().replace("Z", "+00:00")
+        dt    = datetime.fromisoformat(clean)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_IST).strftime(fmt)
+    except Exception:
+        return dt_str
+
+
+def _now_ist(fmt: str = "%d %b %Y, %H:%M IST") -> str:
+    """Current time formatted in IST."""
+    return datetime.now(_IST).strftime(fmt)
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
@@ -448,10 +470,11 @@ def _basic_info_section(meta: SessionMetadata, s: Dict) -> List:
         ("Date of Birth", _req(bi.dob,        "date of birth")),
         ("Address",       _req(bi.address,    "residential address")),
         ("City",          _req(bi.city,       "city")),
-        ("PAN Number",    _req(bi.pan_number, "PAN number")),
-        ("Annual Income", _req(bi.income_range, "income range")),
-        ("Bank",          "ABC Bank"),
-        ("Product",       "Personal Loan"),
+        ("PAN Number",       _req(bi.pan_number,   "PAN number")),
+        ("Annual Income",    _req(bi.income_range, "income range")),
+        ("Loan Amount",      f"Rs {bi.loan_amount:,.0f}" if bi.loan_amount else "INCOMPLETE — not provided"),
+        ("Bank",             "ABC Bank"),
+        ("Product",          "Personal Loan"),
     ]
     return [_kv_table(rows, s, label_w=5.0 * cm)]
 
@@ -467,7 +490,7 @@ def _summary_section(
     risk_level: str,
     s: Dict,
 ) -> List:
-    gen_time    = datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC")
+    gen_time    = _now_ist()
     photo_count = len(entries)
     analysed    = sum(1 for e in entries if e.get("analysis") and "⚠" not in e.get("analysis", "⚠"))
     geo_ok      = geo_result.get("verified", False)
@@ -477,8 +500,8 @@ def _summary_section(
         ("Report Generated",    gen_time),
         ("Case / Session ID",   meta.session_id),
         ("Field Agent Device",  meta.device_id or "—"),
-        ("Investigation Start", meta.started_at),
-        ("Investigation End",   meta.ended_at),
+        ("Investigation Start", _ist(meta.started_at)),
+        ("Investigation End",   _ist(meta.ended_at)),
         ("Duration",            _duration(meta.started_at, meta.ended_at)),
     ]
     applicant_rows = [
@@ -594,11 +617,19 @@ def _location_section(geo_result: Dict[str, Any], address: str, s: Dict) -> List
 
     flowables: List = []
 
-    # Summary KV
+    # Determine address display
+    no_gps = geo_result.get("points_checked", 0) == 0
+    if no_gps:
+        addr_display = "Not available — GPS was not captured during this session"
+    elif address and address not in ("", "—"):
+        addr_display = address
+    else:
+        addr_display = "Address lookup failed (check Google Maps API key)"
+
     centroid_str = (f"{c_lat:.5f}°N, {c_lon:.5f}°E" if c_lat else "—")
     maps_link    = (f"https://maps.google.com/?q={c_lat},{c_lon}" if c_lat else "—")
     summary_rows = [
-        ("Geocoded Address",        address or "—"),
+        ("Geocoded Address",        addr_display),
         ("Session Centroid (GPS)",  centroid_str),
         ("Google Maps Link",        maps_link),
         ("Total GPS Points",        str(geo_result.get("points_checked", 0))),
@@ -650,6 +681,87 @@ def _location_section(geo_result: Dict[str, Any], address: str, s: Dict) -> List
     return flowables
 
 
+# ── Analysis text parser ──────────────────────────────────────────────────────
+
+def _parse_analysis(text: str, s: Dict) -> List:
+    """
+    Convert OpenAI analysis text (markdown headings + bullets) into clean
+    ReportLab flowables for the PDF report.
+    """
+    import re
+
+    flowables: List = []
+    BLUE_HDR  = colors.HexColor("#0D47A1")
+    hdr_style = ParagraphStyle(
+        "ana_hdr", parent=s["small_bold"],
+        textColor=BLUE_HDR,
+        spaceBefore=4, spaceAfter=1,
+    )
+    bul_style = ParagraphStyle(
+        "ana_bul", parent=s["small"],
+        leftIndent=10, spaceBefore=1,
+    )
+    score_style = ParagraphStyle(
+        "ana_score", parent=s["small_bold"],
+        textColor=D_GREY, spaceBefore=4,
+        borderPad=2,
+    )
+
+    BLUE_C = colors.HexColor("#0D47A1")
+
+    for raw_line in text.replace("\r\n", "\n").split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        # **Header**: value
+        m = re.match(r'^\*\*(.+?)\*\*[:\-]?\s*(.*)', line)
+        if m:
+            key = m.group(1).replace('*', '').strip().rstrip(':')
+            val = m.group(2).strip()
+            if 'score' in key.lower() or 'score' in val.lower():
+                display = f"{key}: {val}" if val else key
+                tbl = Table([[Paragraph(f"<b>{display}</b>",
+                    ParagraphStyle("sc", parent=s["small_bold"],
+                                   textColor=BLUE_C, alignment=1))]],
+                    colWidths=["100%"])
+                tbl.setStyle(TableStyle([
+                    ("BACKGROUND",    (0,0), (-1,-1), colors.HexColor("#E8EDF8")),
+                    ("TOPPADDING",    (0,0), (-1,-1), 3),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+                    ("LEFTPADDING",   (0,0), (-1,-1), 6),
+                    ("BOX",           (0,0), (-1,-1), 0.5, BLUE_C),
+                ]))
+                flowables += [Spacer(1, 3), tbl]
+            else:
+                label = ParagraphStyle("ahl", parent=s["small_bold"],
+                                       textColor=BLUE_C, spaceBefore=4)
+                if val:
+                    flowables.append(Paragraph(f"<b>{key}:</b>  {val}", label))
+                else:
+                    flowables.append(Paragraph(f"<b>{key}</b>", label))
+            continue
+
+        # Bullet: - text  or  • text
+        if line.startswith(('- ', '• ', '* ')):
+            body = line[2:].strip()
+            colon_pos = body.find(':')
+            if 0 < colon_pos < 20:
+                lbl, rest = body[:colon_pos].strip(), body[colon_pos+1:].strip()
+                flowables.append(Paragraph(
+                    f"  •  <b>{lbl}:</b> {rest}", bul_style))
+            else:
+                flowables.append(Paragraph(f"  •  {body}", bul_style))
+            continue
+
+        # Plain / fallback
+        clean = re.sub(r'\*+', '', line).strip()
+        if clean:
+            flowables.append(Paragraph(clean, s["small"]))
+
+    return flowables or [Paragraph("No analysis available.", s["small"])]
+
+
 # ── Section 5: Property Documentation ────────────────────────────────────────
 
 def _images_section(entries: List[Dict[str, Any]], s: Dict) -> List:
@@ -677,44 +789,55 @@ def _images_section(entries: List[Dict[str, Any]], s: Dict) -> List:
         else:
             img_cell = Paragraph("[Image file not found on server]", s["small"])
 
-        # Analysis cell
-        analysis_lines = [
-            Paragraph(line.strip(), s["analysis"])
-            for line in analysis.replace("\r\n", "\n").split("\n")
-            if line.strip()
-        ]
+        # ── Analysis: parsed bullets
+        analysis_lines = _parse_analysis(analysis, s)
 
+        # Photo + analysis side-by-side card
         img_inner = Table([[img_cell, analysis_lines]], colWidths=[IMG_W, ANA_W])
         img_inner.setStyle(TableStyle([
             ("VALIGN",        (0, 0), (-1, -1), "TOP"),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 6),
-            ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
-            ("TOPPADDING",    (0, 0), (-1, -1), 6),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-            ("BOX",           (0, 0), (-1, -1), 0.5, B_GREY),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
+            ("TOPPADDING",    (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("BACKGROUND",    (0, 0), (0, -1),  colors.black),
+            ("BACKGROUND",    (1, 0), (1, -1),  WHITE),
             ("LINEAFTER",     (0, 0), (0, -1),  0.5, B_GREY),
         ]))
 
-        blur_s   = entry.get("blur_score")
-        blur_str = f"{blur_s:.0f} ({'SHARP' if blur_s and blur_s >= 40 else 'BORDERLINE'})" if blur_s else "—"
+        # Slim metadata strip above the photo card
         ocr_text = entry.get("nameplate_ocr", {}).get("raw_text", "") if entry.get("nameplate_ocr") else ""
-
-        header_rows = [
-            ("Photo",        f"{idx}  —  {photo_type}"),
-            ("Prompt",       prompt),
-            ("File",         filename),
-            ("GPS Captured", geo_str),
-            ("Blur Score",   blur_str),
+        meta_parts = [
+            f"Photo {idx}  |  {photo_type}",
+            f"GPS: {geo_str}",
         ]
         if ocr_text:
-            header_rows.append(("Nameplate OCR", ocr_text[:200]))
-        meta_tbl = _kv_table(header_rows, s, label_w=3.5 * cm)
+            meta_parts.append(f"Nameplate OCR: {ocr_text[:120]}")
+
+        meta_strip = Table(
+            [[Paragraph("  " + "   │  ".join(meta_parts), s["small"])]],
+            colWidths=[CONTENT_W],
+        )
+        meta_strip.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), colors.HexColor("#E8EDF8")),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("BOX",           (0, 0), (-1, -1), 0.5, B_GREY),
+        ]))
+
+        # Prompt label
+        prompt_para = Paragraph(
+            f"<b>Evidence {idx}:</b>  {prompt}",
+            ParagraphStyle("ep", parent=s["label"],
+                           textColor=colors.HexColor("#0D47A1"), spaceBefore=8),
+        )
 
         flowables.append(KeepTogether([
-            meta_tbl,
-            Spacer(1, 4),
+            prompt_para,
+            Spacer(1, 3),
+            meta_strip,
             img_inner,
-            Spacer(1, 12),
+            Spacer(1, 14),
         ]))
 
     return flowables
@@ -795,7 +918,7 @@ def _pan_section(pan_verification: Optional[Dict[str, Any]], s: Dict) -> List:
         ("Father's Name Match", "MATCHED" if nsdl.get("father_name_match") else "NOT MATCHED"),
         ("DOB Match",           "MATCHED" if nsdl.get("dob_match")         else "NOT MATCHED"),
         ("Aadhaar Seeded",      "YES"     if nsdl.get("aadhaar_seeded")    else "NOT CONFIRMED"),
-        ("Verification Time",   nsdl.get("verified_at", "—")),
+        ("Verification Time",   _ist(nsdl.get("verified_at", ""))),
         ("Data Source",         nsdl.get("source", "NSDL — Income Tax Department")),
     ]
     flowables.append(_kv_table(nsdl_rows, s))
@@ -822,6 +945,109 @@ def _pan_section(pan_verification: Optional[Dict[str, Any]], s: Dict) -> List:
         ok=overall_ok,
     ))
     return flowables
+
+
+# ── CIBIL Score section ───────────────────────────────────────────────────────
+
+def _cibil_section(cibil: Optional[Dict[str, Any]], s: Dict) -> List:
+    if not cibil:
+        return [_incomplete("CIBIL score could not be retrieved — PAN number required", s)]
+
+    score   = cibil.get("score", 0)
+    grade   = cibil.get("grade", "")
+    label   = cibil.get("label", "")
+    color_h = cibil.get("color", "#555555")
+    msg     = cibil.get("message", "")
+    rec     = cibil.get("recommendation", "")
+
+    # Score colour mapped to ReportLab
+    score_color = colors.HexColor(color_h)
+
+    # Big score display
+    score_style = ParagraphStyle(
+        "cibil_score", parent=s["risk_score"],
+        textColor=score_color, fontSize=44, alignment=1,
+    )
+    label_style = ParagraphStyle(
+        "cibil_lbl", parent=s["risk_label"],
+        textColor=score_color, fontSize=14, alignment=1,
+    )
+
+    # Visual score bar (300–900 range)
+    BAR_CELLS = 12
+    filled = max(0, min(BAR_CELLS, round((score - 300) / (600 / BAR_CELLS))))
+    bar_data = [[""] * BAR_CELLS]
+    bar_tbl  = Table(bar_data, colWidths=[CONTENT_W / BAR_CELLS] * BAR_CELLS, rowHeights=[0.5 * cm])
+    bar_cmds: list = [("GRID", (0, 0), (-1, -1), 0.3, B_GREY)]
+    for i in range(BAR_CELLS):
+        bg = score_color if i < filled else L_GREY
+        bar_cmds.append(("BACKGROUND", (i, 0), (i, 0), bg))
+    bar_tbl.setStyle(TableStyle(bar_cmds))
+
+    score_block = Table(
+        [
+            [Paragraph(str(score), score_style)],
+            [Paragraph(f"{label}  —  {msg}", label_style)],
+            [Spacer(1, 4)],
+            [bar_tbl],
+            [Paragraph(f"Range: 300 (lowest) ←{'─' * 20}→ 900 (highest)", s["small"])],
+        ],
+        colWidths=[CONTENT_W],
+    )
+    score_block.setStyle(TableStyle([
+        ("BOX",           (0, 0), (-1, -1), 1.5, score_color),
+        ("TOPPADDING",    (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+    ]))
+
+    # Detail rows
+    detail_rows = [
+        ("CIBIL Score",        str(score)),
+        ("Credit Grade",       f"{grade}  —  {label}"),
+        ("Assessment",         msg),
+        ("Loan Recommendation",rec),
+        ("PAN Number",         cibil.get("pan_number", "—")),
+        ("Bureau",             cibil.get("bureau", "TransUnion CIBIL")),
+        ("Report Date",        cibil.get("report_date", "—")),
+    ]
+
+    # Reference bands
+    bands_data = [
+        [Paragraph("Score Range", s["small_bold"]),
+         Paragraph("Grade", s["small_bold"]),
+         Paragraph("Eligibility", s["small_bold"])],
+        [Paragraph("800 – 900", s["small"]), Paragraph("Excellent", s["small"]), Paragraph("Best rates", s["small"])],
+        [Paragraph("750 – 799", s["small"]), Paragraph("Very Good",  s["small"]), Paragraph("Standard rates", s["small"])],
+        [Paragraph("700 – 749", s["small"]), Paragraph("Good",       s["small"]), Paragraph("Eligible", s["small"])],
+        [Paragraph("650 – 699", s["small"]), Paragraph("Fair",       s["small"]), Paragraph("Conditional", s["small"])],
+        [Paragraph("600 – 649", s["small"]), Paragraph("Poor",       s["small"]), Paragraph("High risk", s["small"])],
+        [Paragraph("300 – 599", s["small"]), Paragraph("Very Poor",  s["small"]), Paragraph("Decline", s["small"])],
+    ]
+    bw = CONTENT_W / 3
+    bands_tbl = Table(bands_data, colWidths=[bw, bw, bw])
+    bands_tbl.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0), BLACK),
+        ("TEXTCOLOR",     (0, 0), (-1, 0), WHITE),
+        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [WHITE, XL_GREY]),
+        ("GRID",          (0, 0), (-1, -1), 0.4, B_GREY),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        # Highlight applicant's row
+        *([("BACKGROUND", (0, 1 + max(0, 5 - max(0, (score - 300) // 100))),
+             (-1, 1 + max(0, 5 - max(0, (score - 300) // 100))),
+             colors.HexColor("#E8F5E9"))] if score >= 700 else []),
+    ]))
+
+    return [
+        score_block,
+        Spacer(1, 10),
+        _kv_table(detail_rows, s),
+        Spacer(1, 10),
+        *_sub_header("CIBIL Score Reference Table", s),
+        bands_tbl,
+    ]
 
 
 # ── Section 5d: Income & Financial Analysis ───────────────────────────────────
@@ -948,8 +1174,20 @@ def _ai_credit_section(credit_analysis: Optional[Dict[str, Any]], s: Dict) -> Li
     # Executive summary
     summary = ca.get("executive_summary", "")
     if summary:
-        flowables.append(Paragraph(f"AI Assessment: {summary}", s["value"]))
+        flowables.append(Paragraph(f"<b>Credit Assessment:</b>  {summary}", s["value"]))
         flowables.append(Spacer(1, 8))
+
+    # Detailed credit narrative (new fields from enhanced prompt)
+    for field_key, field_label in [
+        ("creditworthiness_narrative",       "Creditworthiness Analysis"),
+        ("lifestyle_vs_income_assessment",   "Lifestyle vs Declared Income"),
+        ("repayment_capacity_analysis",      "Repayment Capacity"),
+    ]:
+        narrative = ca.get(field_key, "")
+        if narrative:
+            flowables += _sub_header(field_label, s)
+            flowables.append(Paragraph(narrative, s["value"]))
+            flowables.append(Spacer(1, 6))
 
     # Four assessment pillars
     pillar_keys = [
@@ -1313,7 +1551,7 @@ def _make_page_template(session_id: str):
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(M_GREY)
         canvas.drawCentredString(w / 2, y_hdr + 2, f"Case: {session_id}")
-        canvas.drawRightString(w - MARGIN, y_hdr + 2, datetime.now(timezone.utc).strftime("%d %b %Y"))
+        canvas.drawRightString(w - MARGIN, y_hdr + 2, _now_ist("%d %b %Y"))
 
         # ── Footer line ──
         y_ftr = 0.9 * cm
@@ -1340,6 +1578,7 @@ def generate_credit_report(
     pan_verification: Optional[Dict[str, Any]] = None,
     nameplate_ocr: Optional[Dict[str, Any]] = None,
     credit_analysis: Optional[Dict[str, Any]] = None,
+    cibil_score: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """Build the enterprise-grade PDF and return its absolute path."""
     session_dir = get_storage_root() / meta.session_id
@@ -1385,7 +1624,7 @@ def generate_credit_report(
             meta, geo_result, image_entries, income_analysis, pan_verification
         )
 
-    gen_ts = datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC")
+    gen_ts = _now_ist()
     story: List = []
 
     # ── Cover title block ──────────────────────────────────────────────────
@@ -1442,6 +1681,10 @@ def generate_credit_report(
     # ── 7. Income & Financial Analysis ───────────────────────────────────
     story += _section_header("7.  Income & Financial Analysis  (Bank Statement)", s)
     story += _income_section(income_analysis, meta, s)
+
+    # ── 7b. CIBIL Credit Score ────────────────────────────────────────────
+    story += _section_header("7b.  CIBIL Credit Score  (TransUnion CIBIL)", s)
+    story += _cibil_section(cibil_score, s)
 
     # ── 8. AI Credit Analysis ────────────────────────────────────────────
     story += _section_header("8.  AI Credit Analysis  (GPT-4o)", s)

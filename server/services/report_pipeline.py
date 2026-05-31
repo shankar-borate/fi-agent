@@ -51,6 +51,7 @@ class ReportPipeline:
         self.pan_verification: Optional[Dict]      = None
         self.analysed_entries: List[Dict[str, Any]] = []
         self.income_analysis: Optional[Dict]       = None
+        self.cibil_score:     Optional[Dict]       = None
         self.credit_analysis: Optional[Dict]       = None
 
     # ── Public entry point ─────────────────────────────────────────────────
@@ -65,6 +66,7 @@ class ReportPipeline:
             await self._step_pan_verification()
             await self._step_image_analysis()
             await self._step_income_analysis()
+            await self._step_cibil_score()
             await self._step_credit_analysis()
             await self._step_save_session_data()
             await self._step_generate_pdf()
@@ -219,27 +221,70 @@ class ReportPipeline:
     # ── Step 6: Income / bank statement analysis ───────────────────────────
 
     async def _step_income_analysis(self) -> None:
+        """
+        Pull bank statement PDFs from the vault folder keyed by mobile number.
+        Vault path: {FI_BANK_VAULT_ROOT}/{mobile_number}/*.pdf
+        If no PDFs found in vault, falls back to any uploaded document.
+        """
         from services.openai_service import analyze_bank_statement
+        from pathlib import Path
 
-        if not self.meta.documents:
+        # ── 1. Try vault lookup by mobile number ──────────────────────────
+        mobile = (self.meta.basic_info.mobile_number or "").strip() if self.meta.basic_info else ""
+        vault_root = Path(settings.fi_bank_vault_root)
+        vault_pdfs: list[Path] = []
+
+        if mobile:
+            vault_dir = vault_root / mobile
+            if vault_dir.exists():
+                vault_pdfs = sorted(vault_dir.glob("*.pdf"))
+                logger.info("[Pipeline] Vault %s — found %d PDF(s): %s",
+                            vault_dir, len(vault_pdfs),
+                            [p.name for p in vault_pdfs])
+            else:
+                logger.warning("[Pipeline] Vault folder not found for mobile %s: %s",
+                               mobile, vault_dir)
+        else:
+            logger.warning("[Pipeline] No mobile number — cannot look up vault")
+
+        # ── 2. Fall back to uploaded document (legacy path) ───────────────
+        if not vault_pdfs and self.meta.documents:
+            bank_doc = next(
+                (d for d in self.meta.documents if d.document_type == "bank_statement"), None
+            )
+            if bank_doc:
+                fallback = self.storage / bank_doc.filename
+                if fallback.exists():
+                    vault_pdfs = [fallback]
+                    logger.info("[Pipeline] Using uploaded statement: %s", bank_doc.filename)
+
+        if not vault_pdfs:
+            logger.info("[Pipeline] No bank statement available — income analysis skipped")
             return
 
-        bank_doc = next(
-            (d for d in self.meta.documents if d.document_type == "bank_statement"), None
-        )
-        if not bank_doc:
-            return
-
-        doc_path = self.storage / bank_doc.filename
-        if not doc_path.exists():
-            logger.warning("[Pipeline] Bank statement not found: %s", doc_path)
-            return
-
-        self.income_analysis = await analyze_bank_statement(doc_path)
+        # ── 3. Analyse first PDF (most recent alphabetically) ─────────────
+        target_pdf = vault_pdfs[-1]   # last = likely most recent when sorted by name
+        logger.info("[Pipeline] Analysing bank statement: %s", target_pdf.name)
+        self.income_analysis = await analyze_bank_statement(target_pdf)
         await self._save_response("income_analysis.json",
                                   json.dumps(self.income_analysis, indent=2))
         logger.info("[Pipeline] Income analysis: creditworthiness=%s",
                     (self.income_analysis or {}).get("creditworthiness_score"))
+
+    # ── Step 6b: CIBIL score lookup ────────────────────────────────────────
+
+    async def _step_cibil_score(self) -> None:
+        from services.cibil_service import get_cibil_score
+
+        pan = (self.pan_verification or {}).get("ocr", {}).get("pan_number", "")
+        if not pan and self.meta.basic_info:
+            pan = self.meta.basic_info.pan_number
+
+        self.cibil_score = await get_cibil_score(pan, self.income_analysis)
+        await self._save_response("cibil_score.json",
+                                  json.dumps(self.cibil_score, indent=2))
+        logger.info("[Pipeline] CIBIL: %d (%s)", self.cibil_score["score"],
+                    self.cibil_score["grade"])
 
     # ── Step 7: Comprehensive credit analysis ──────────────────────────────
 
@@ -274,6 +319,7 @@ class ReportPipeline:
             self.pan_verification,
             self.nameplate_ocr,
             self.income_analysis,
+            self.credit_analysis,
         )
 
     # ── Step 9: Generate PDF ────────────────────────────────────────────────
@@ -292,6 +338,7 @@ class ReportPipeline:
             self.pan_verification,
             self.nameplate_ocr,
             self.credit_analysis,
+            self.cibil_score,
         )
         logger.info("[Pipeline] PDF ready: %s  (%.1f KB)",
                     pdf_path, pdf_path.stat().st_size / 1024)

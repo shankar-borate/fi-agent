@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # Google Maps — reverse geocoding for Location Report
     google_maps_api_key: str = ""
 
+    # Bank statement vault — PDFs stored as {vault_root}/{mobile_number}/*.pdf
+    # The pipeline reads these automatically after submit (no user upload needed).
+    fi_bank_vault_root: str = "D:\\bank-vault"
+
     # Geo verification — all captured points must lie within this radius
     # of the session centroid to be considered at the same location.
     geo_radius_meters: float = 500.0

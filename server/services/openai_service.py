@@ -58,46 +58,243 @@ logger = logging.getLogger(__name__)
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
 _SYSTEM = (
-    "You are an experienced Field Investigation (FI) officer working for a "
-    "microfinance / NBFC credit team in India. You assist loan officers by "
-    "analysing property and residential images captured during home visits. "
-    "Your assessments are objective, professional, and support the credit "
-    "underwriting decision. Keep responses concise and factual."
+    "You are a senior Field Investigation (FI) officer and credit underwriter at ABC Bank, India. "
+    "You analyse home-visit images to assess personal loan applications. "
+    "Your observations must directly support or challenge the credit decision. "
+    "Be concise, factual, and specific. Never speculate beyond what is visible."
 )
 
+# Tag-specific prompts — each tells GPT exactly what to look for and why
+_TAG_PROMPTS: Dict[str, str] = {
+
+    "selfie": """\
+ABC Bank — Identity Verification
+INTENT: Confirm the applicant's identity, appearance, and that a real person is present.
+
+Analyse this portrait image and respond using EXACTLY these headings:
+
+**Identity Assessment**: Is a clear human face visible? Lighting adequate for facial recognition?
+
+**Liveness Indicators**: Any signs of a spoofed or printed photo? (flat image, reflections, background anomalies)
+
+**Presentation**: Professional / Casual / Unkempt — does appearance align with stated income level?
+
+**Risk Flags**: Anything that raises identity doubt. Write "None" if clear.
+
+**Identity Score**: <1–10>  (10 = clear, genuine identity; 1 = serious doubt)
+
+Limit to 150 words. Be factual.""",
+
+    "nameplate": """\
+ABC Bank — Address & Identity Verification
+INTENT: Verify the applicant's residential address, confirm they live there, and extract any visible names or addresses from the nameplate/signage.
+
+Analyse this door/gate nameplate image and respond using EXACTLY these headings:
+
+**Nameplate Text**: Transcribe ALL visible text exactly as shown (name, flat/house number, street, etc.).
+
+**Address Match**: Does the visible address or name match what the applicant declared? Note any discrepancy.
+
+**Property Ownership Signals**: Does the nameplate suggest owner-occupancy or rental? (e.g. single family name vs. multiple names, condition)
+
+**Locality Quality**: Based on visible surroundings — High-end / Middle-class / Working-class / Slum
+
+**Risk Flags**: Any mismatch, illegibility, or suspicious detail. Write "None" if clear.
+
+**Verification Score**: <1–10>  (10 = name/address clearly confirmed; 1 = unreadable or mismatched)
+
+Limit to 180 words.""",
+
+    "kitchen": """\
+ABC Bank — Lifestyle & Income Level Assessment
+INTENT: Kitchen photos reveal household income level, spending habits, and lifestyle quality — key indicators of financial stability and repayment capacity.
+
+Analyse this kitchen image and respond using EXACTLY these headings:
+
+**Kitchen Type**: Modular / Semi-modular / Basic / Makeshift
+
+**Appliances Visible**: List major appliances (refrigerator, microwave, RO water purifier, dishwasher, etc.) — these indicate disposable income.
+
+**Income Level Indicator**: Affluent | Upper-Middle | Middle | Lower-Middle | Poor
+(Base on counter materials, cabinetry quality, appliances, cleanliness, space utilisation)
+
+**Spending Behaviour**: Signs of organised, planned household (indicates financial discipline) vs. disorganised (financial stress indicator)
+
+**Credit-Relevant Observations**:
+- <observation linking kitchen quality to income/lifestyle>
+- <any premium vs. budget indicators>
+
+**Risk Flags**: Extreme poverty, signs of financial distress. Write "None" if not applicable.
+
+**Lifestyle Score**: <1–10>  (10 = affluent lifestyle clearly supporting loan repayment capacity)
+
+Limit to 200 words.""",
+
+    "bedroom1": """\
+ABC Bank — Lifestyle & Living Standard Assessment
+INTENT: Bedroom quality directly reflects the applicant's income level, spending patterns, and household stability — used to cross-check declared income.
+
+Analyse this bedroom image and respond using EXACTLY these headings:
+
+**Room Quality**: Premium / Standard / Basic / Minimal
+
+**Furnishing Level**: List visible furniture and fittings (bed type, AC, wardrobe, TV, etc.) as income indicators.
+
+**Income Cross-check**: Affluent | Upper-Middle | Middle | Lower-Middle | Poor
+(Compare visible assets against declared income range)
+
+**Household Stability**: Is the bedroom well-maintained, indicating a stable household? Or cluttered/distressed?
+
+**Credit-Relevant Observations**:
+- <specific asset that supports or contradicts declared income>
+- <household stability indicators>
+
+**Risk Flags**: Mismatch with declared income, signs of financial distress. Write "None" if clear.
+
+**Lifestyle Score**: <1–10>  (10 = furnishings clearly consistent with declared income and loan request)
+
+Limit to 200 words.""",
+
+    "bedroom2": """\
+ABC Bank — Lifestyle & Living Standard Assessment (Bedroom 2)
+INTENT: Second bedroom confirms family size, household income level, and whether the property supports the lifestyle claimed in the application.
+
+Analyse this second bedroom image and respond using EXACTLY these headings:
+
+**Room Purpose**: Master bedroom / Children's room / Guest room / Home office / Storage
+
+**Furnishing & Asset Level**: List visible items. Note premium vs. budget indicators.
+
+**Family Size Indicator**: Does this room suggest single occupant, nuclear family, or joint family? (affects loan repayment capacity)
+
+**Income Level Cross-check**: Affluent | Upper-Middle | Middle | Lower-Middle | Poor
+
+**Credit-Relevant Observations**:
+- <observation supporting or questioning income claims>
+- <asset level consistency with loan amount>
+
+**Risk Flags**: Any inconsistency with application data. Write "None" if clear.
+
+**Lifestyle Score**: <1–10>
+
+Limit to 180 words.""",
+
+    "hall": """\
+ABC Bank — Lifestyle, Spending & Asset Assessment
+INTENT: The hall/living room is the primary lifestyle indicator — furniture, electronics, and decor directly reflect spending capacity and disposable income. Used to assess whether the applicant's lifestyle is consistent with their declared income and loan request.
+
+Analyse this hall/living room image and respond using EXACTLY these headings:
+
+**Living Room Quality**: Premium / Standard / Basic / Minimal
+
+**Key Assets Visible**: List all major items (sofa set, TV size/brand, AC, home theatre, art, etc.) — each signals spending capacity.
+
+**Lifestyle Assessment**: Affluent | Upper-Middle | Middle | Lower-Middle | Poor
+(Your most important assessment — be specific about what drives this rating)
+
+**Spending Pattern**: Planned & aspirational (premium brands, organised) vs. Functional (budget items) vs. Financially stressed (minimal or poor condition)
+
+**Income Consistency Check**: Does the visible lifestyle match the declared income range and requested loan amount? Note any over/under-claiming.
+
+**Risk Flags**: Lifestyle significantly above or below declared income (both are red flags). Write "None" if consistent.
+
+**Asset Score**: <1–10>  (10 = clear evidence of stable middle/upper-middle income lifestyle)
+
+Limit to 220 words. This is your most important lifestyle assessment.""",
+
+    "outside": """\
+ABC Bank — Property Value & Locality Assessment
+INTENT: Exterior and locality photos are used to assess property value, neighbourhood quality, and whether the locality supports the credit profile. High-value locality = better collateral assurance and lower credit risk.
+
+Analyse this exterior/locality image and respond using EXACTLY these headings:
+
+**Property Type**: Independent house / Apartment building / Row house / Urban tenement / Rural property
+
+**Construction Quality**: Premium (RCC, modern finish) / Standard (plastered, maintained) / Basic (brick, minor repairs needed) / Poor (dilapidated)
+
+**Locality Grade**: High-end residential / Upper-middle residential / Middle-class colony / Working-class area / Slum / Industrial/commercial
+(This directly affects property value and credit risk)
+
+**Neighbourhood Indicators**: Roads, nearby infrastructure, commercial activity visible — these indicate locality development level and property appreciation potential.
+
+**Property Value Estimate**: High / Medium / Low — based on visible construction and locality.
+
+**Credit Risk Implications**: How does this locality/property value affect the loan risk? Does it support the loan amount applied for?
+
+**Risk Flags**: Locality or property conditions that increase credit risk. Write "None" if strong locality.
+
+**Property Score**: <1–10>  (10 = prime locality with high property value, lowest credit risk)
+
+Limit to 220 words.""",
+
+    "pan": """\
+ABC Bank — PAN Card Identity Verification
+INTENT: PAN card is the primary identity document for loan verification — used to confirm applicant identity, check NSDL records, and verify name consistency.
+
+Analyse this PAN card image and respond using EXACTLY these headings:
+
+**Card Authenticity**: Does the card appear genuine? (hologram, print quality, layout consistent with official PAN cards)
+
+**Visible Data**: List all readable fields — Name, Father's Name, Date of Birth, PAN Number.
+
+**OCR Quality**: Are all fields clearly readable? Note any partially visible or obscured text.
+
+**Identity Consistency**: Does the name/DOB visible match what you'd expect for the applicant's stated profile?
+
+**Risk Flags**: Tampered card, poor readability, inconsistencies. Write "None" if clear.
+
+**Verification Score**: <1–10>  (10 = all fields clearly visible and card appears genuine)
+
+Limit to 150 words.""",
+}
+
+# Fallback generic template for untagged photos
 _USER_TEMPLATE = """\
-I am a Credit Officer conducting a Field Investigation (FI) for a small loan application.
+ABC Bank — Personal Loan Field Investigation
+Image context: {prompt}
 
-**Image context**: {prompt}
+Analyse this image for credit assessment and respond using EXACTLY these headings:
 
-Analyse this image and return a structured assessment using exactly the following headings:
+**Scene / Property Type**: One line description.
 
-**Scene / Property Type**: (one line — e.g. "Residential living room", "Exterior of house", "Applicant identity photo")
+**Living Standard**: Affluent | Upper-Middle | Middle | Lower-Middle | Poor
 
-**Condition**: Excellent | Good | Average | Poor | Not Assessable
-
-**Key Observations**:
+**Credit-Relevant Observations**:
 - <observation 1>
 - <observation 2>
 - <observation 3 if applicable>
 
-**Credit Indicators**:
-- Positive: <any indicator supporting creditworthiness, or "None identified">
-- Concerns: <any red flag or area needing clarification, or "None identified">
+**Risk Flags**: Any concerns. Write "None" if clear.
 
-**Assessment Score**: <1–10>  (10 = strongest positive indicator for creditworthiness)
+**Verification Score**: <1–10>
 
-Keep the total response under 220 words. Be factual; do not speculate beyond what is visible.
+Limit to 180 words. Be factual and credit-specific.
 """
+
+
+def _build_user_prompt(tag: str, prompt: str) -> str:
+    """Return the tag-specific prompt, falling back to the generic template."""
+    tag_key = tag.lower() if tag else ""
+    # Map similar tags to canonical keys
+    _tag_map = {
+        "bedroom": "bedroom1", "bed1": "bedroom1", "bed2": "bedroom2",
+        "living": "hall", "living_room": "hall",
+        "exterior": "outside", "front": "outside", "outside1": "outside", "outside2": "outside",
+        "door": "nameplate", "signage": "nameplate",
+        "self": "selfie", "portrait": "selfie",
+    }
+    canonical = _tag_map.get(tag_key, tag_key)
+    if canonical in _TAG_PROMPTS:
+        return _TAG_PROMPTS[canonical]
+    return _USER_TEMPLATE.format(prompt=prompt)
 
 
 # ── Single-image analysis ─────────────────────────────────────────────────────
 
-async def analyze_image(image_path: Path, prompt: str) -> str:
+async def analyze_image(image_path: Path, prompt: str, tag: str = "") -> str:
     """
-    Sends one image to GPT-4o Vision and returns the analysis string.
-    Returns a placeholder string if the key is not configured or the file is missing.
-    Pre-conditions are checked before the retry wrapper to avoid wasting retries.
+    Sends one image to GPT-4o Vision with a tag-specific prompt and returns the analysis.
+    tag: photo type (selfie, kitchen, bedroom1, hall, outside, nameplate, pan, …)
     """
     if not settings.openai_api_key:
         logger.warning("[OpenAI] API key not set — skipping image analysis")
@@ -107,19 +304,21 @@ async def analyze_image(image_path: Path, prompt: str) -> str:
         logger.warning("[OpenAI] Image file missing: %s", image_path)
         return f"Image file not found: {image_path.name}"
 
-    return await _analyze_image_with_retry(image_path, prompt)
+    return await _analyze_image_with_retry(image_path, prompt, tag)
 
 
 @_async_retry(max_attempts=3, delay_s=2.0)
-async def _analyze_image_with_retry(image_path: Path, prompt: str) -> str:
-    suffix = image_path.suffix.lower().lstrip(".")
-    mime   = "image/jpeg" if suffix in ("jpg", "jpeg") else f"image/{suffix}"
-    logger.info("[OpenAI] Analysing %s (%.1f KB)", image_path.name, image_path.stat().st_size / 1024)
+async def _analyze_image_with_retry(image_path: Path, prompt: str, tag: str = "") -> str:
+    suffix     = image_path.suffix.lower().lstrip(".")
+    mime       = "image/jpeg" if suffix in ("jpg", "jpeg") else f"image/{suffix}"
+    user_text  = _build_user_prompt(tag, prompt)
+    logger.info("[OpenAI] Analysing %s  tag=%s (%.1f KB)", image_path.name, tag or "generic",
+                image_path.stat().st_size / 1024)
     b64    = base64.b64encode(image_path.read_bytes()).decode()
     client = AsyncOpenAI(api_key=settings.openai_api_key)
     resp   = await client.chat.completions.create(
         model=settings.openai_model,
-        max_tokens=450,
+        max_tokens=500,
         messages=[
             {"role": "system", "content": _SYSTEM},
             {
@@ -128,7 +327,7 @@ async def _analyze_image_with_retry(image_path: Path, prompt: str) -> str:
                     {"type": "image_url",
                      "image_url": {"url": f"data:{mime};base64,{b64}", "detail": "low"}},
                     {"type": "text",
-                     "text": _USER_TEMPLATE.format(prompt=prompt)},
+                     "text": user_text},
                 ],
             },
         ],
@@ -141,33 +340,37 @@ async def _analyze_image_with_retry(image_path: Path, prompt: str) -> str:
 # ── Bank statement income analysis ───────────────────────────────────────────
 
 _INCOME_SYSTEM = (
-    "You are a senior credit analyst at an Indian NBFC / microfinance institution. "
-    "You analyse bank statements to assess the applicant's income stability, spending "
-    "discipline, and creditworthiness. Be objective, precise, and conservative."
+    "You are a senior credit underwriter at ABC Bank, India, specialising in personal loan assessment. "
+    "You analyse bank statements to determine whether an applicant has stable income and sufficient "
+    "repayment capacity for the requested loan. Apply conservative Indian banking standards: "
+    "EMI should not exceed 40-50% of net monthly income. Flag any signs of financial stress clearly."
 )
 
 _INCOME_PROMPT = """\
-Analyse the following bank statement text and return ONLY a valid JSON object with these keys:
+ABC Bank — Personal Loan Credit Assessment
+Analyse the following bank statement for loan eligibility and repayment capacity.
+
+Return ONLY a valid JSON object with these exact keys (no other text):
 
 {{
-  "months_covered": <integer — number of months in the statement>,
-  "avg_monthly_income": <number — average monthly credit / income in INR>,
-  "avg_monthly_expenses": <number — average monthly debit / expenses in INR>,
-  "avg_monthly_savings": <number — average net savings per month in INR>,
-  "expense_to_income_ratio": <float 0.0–1.0 — expenses divided by income>,
-  "salary_detected": <true | false — whether regular salary credits are visible>,
-  "income_sources": [<list of identified income source strings>],
-  "emi_count": <integer — number of regular EMI / loan-repayment debits found>,
-  "bounce_count": <integer — number of dishonoured / returned transactions>,
-  "creditworthiness_score": <integer 0–10 — overall credit health, 10 = excellent>,
-  "risk_flags": [<list of concern strings>],
-  "positive_indicators": [<list of positive financial indicator strings>],
-  "summary": "<2–3 sentence plain-English summary of financial health>"
+  "months_covered":           <integer — number of months covered by this statement>,
+  "avg_monthly_income":       <number — average monthly credits/income in INR>,
+  "avg_monthly_expenses":     <number — average monthly debits/expenses in INR>,
+  "avg_monthly_savings":      <number — average net savings per month in INR>,
+  "expense_to_income_ratio":  <float 0.0–1.0 — total expenses divided by total income>,
+  "salary_detected":          <true | false — is there a regular fixed salary credit?>,
+  "income_sources":           [<identified income sources e.g. "Salary - Employer Name", "Business receipts">],
+  "existing_emi_count":       <integer — number of existing loan EMI debits found>,
+  "existing_emi_total":       <number — estimated total existing EMI burden per month in INR>,
+  "bounce_count":             <integer — dishonoured / returned / insufficient-fund transactions>,
+  "large_irregular_debits":   [<any unusually large one-time withdrawals with approximate amount>],
+  "creditworthiness_score":   <integer 0–10 — repayment capacity score; 10 = excellent, 0 = high risk>,
+  "risk_flags":               [<specific concerns that could affect loan repayment>],
+  "positive_indicators":      [<specific strengths supporting loan approval>],
+  "summary":                  "<2–3 sentences: income stability, repayment capacity, and recommendation>"
 }}
 
-Return ONLY the JSON object. Do not include any other text.
-
-Bank statement text (up to {chars} characters):
+Bank statement text ({chars} characters):
 {text}
 """
 
@@ -236,43 +439,63 @@ async def analyze_bank_statement(pdf_path: Path) -> Dict[str, Any]:
 # ── Comprehensive credit analysis ────────────────────────────────────────────
 
 _CREDIT_SYSTEM = (
-    "You are a senior credit underwriter at ABC Bank (India). "
-    "You review Field Investigation reports for personal loan applications and produce "
-    "a thorough, objective credit assessment. Be concise, structured, and professional. "
-    "Use INR (₹) for monetary values."
+    "You are the Head of Credit Underwriting at ABC Bank, India, reviewing a personal loan application. "
+    "You have received a complete Field Investigation (FI) report including home-visit photos, "
+    "identity verification, income documentation, and GPS-verified location data. "
+    "Your task is to produce a final credit decision that is thorough, objective, and defensible. "
+    "Apply RBI personal loan guidelines and standard Indian banking credit norms. "
+    "Use INR (Rs) for all monetary values. Be concise and specific — avoid vague language."
 )
 
 _CREDIT_PROMPT = """\
-Review the following Field Investigation data for a personal loan application at ABC Bank
-and return ONLY a valid JSON object with your complete credit assessment.
+ABC BANK — PERSONAL LOAN CREDIT ASSESSMENT
+Field Investigation Report Review
 
-APPLICANT:
+Evaluate all the evidence below and return ONLY a valid JSON credit assessment.
+
+━━━ APPLICANT PROFILE ━━━
 {basic_info}
 
-INTERVIEW Q&A:
+━━━ LOAN REQUEST ━━━
+Amount Requested: {loan_amount_str}
+Assessment requirement: Verify if income, property, and identity evidence support
+repayment of this amount. Estimated EMI at 12% p.a. / 5 years — check against income.
+Flag if monthly EMI would exceed 40% of net monthly income.
+
+━━━ INTERVIEW RESPONSES ━━━
 {qa_text}
 
-HOME EVIDENCE PHOTOS:
+━━━ HOME EVIDENCE (Photo Analysis) ━━━
 {photo_summary}
 
-PAN CARD VERIFICATION:
-{pan_summary}
+━━━ IDENTITY VERIFICATION ━━━
+PAN Card: {pan_summary}
+Home Nameplate OCR: {nameplate_text}
 
-NAMEPLATE OCR:
-{nameplate_text}
-
-INCOME / BANK STATEMENT ANALYSIS:
+━━━ INCOME EVIDENCE (Bank Statement) ━━━
 {income_summary}
 
-LOCATION DATA:
+━━━ LOCATION VERIFICATION ━━━
 {location_summary}
+
+━━━ CREDIT ASSESSMENT CRITERIA ━━━
+1. IDENTITY: PAN verified, name matches interview, face matches selfie
+2. RESIDENCE: Home photos show genuine occupation, nameplate confirms address
+3. INCOME: Salary/income sufficient for EMI, no excessive existing liabilities
+4. LOCATION: All GPS readings within 500m (genuine on-site visit)
+5. AFFORDABILITY: Max 40% of net income for total EMI burden including this loan
+6. LIFESTYLE CONSISTENCY: Property condition consistent with stated income level
 
 Return this exact JSON structure (no other text):
 {{
-  "overall_credit_score": <integer 0-100>,
-  "risk_grade":           "<AAA|AA|A|BBB|BB|B|CCC|D>",
-  "recommendation":       "<APPROVE|APPROVE_WITH_CONDITIONS|REFER|DECLINE>",
-  "loan_eligibility_inr": <estimated max loan amount as integer>,
+  "overall_credit_score":    <integer 0-100>,
+  "risk_grade":              "<AAA|AA|A|BBB|BB|B|CCC|D>",
+  "recommendation":          "<APPROVE|APPROVE_WITH_CONDITIONS|REFER|DECLINE>",
+  "requested_amount_inr":    <requested loan amount as integer>,
+  "loan_eligibility_inr":    <max supportable loan amount as integer>,
+  "affordability_status":    "<AFFORDABLE|BORDERLINE|UNAFFORDABLE>",
+  "estimated_monthly_emi":   <integer — EMI for requested amount at 12% over 5 yrs>,
+  "emi_to_income_ratio":     <float 0.0-1.0 — estimated EMI divided by monthly income>,
 
   "identity_assessment": {{
     "score": <0-25>,
@@ -288,7 +511,7 @@ Return this exact JSON structure (no other text):
 
   "income_assessment": {{
     "score": <0-25>,
-    "summary": "<2 sentences>",
+    "summary": "<2 sentences — explicitly mention if income supports the loan amount>",
     "flags": [<list of concerns>]
   }},
 
@@ -298,10 +521,17 @@ Return this exact JSON structure (no other text):
     "flags": [<list of concerns>]
   }},
 
-  "positive_factors":  [<list of strengths observed>],
-  "risk_factors":      [<list of risks or concerns>],
-  "conditions":        [<list of any loan conditions if APPROVE_WITH_CONDITIONS>],
-  "executive_summary": "<3-4 sentence overall assessment for the credit committee>"
+  "positive_factors":  [<minimum 3 specific strengths with evidence>],
+  "risk_factors":      [<minimum 3 specific risks with evidence — always include if requested > eligibility>],
+  "conditions":        [<specific conditions; include reduced amount if unaffordable>],
+
+  "creditworthiness_narrative": "<4-6 sentences of detailed credit intelligence: explain HOW the evidence supports or challenges the application, reference specific photos/income data/location, give your professional underwriter's view on credit character, capacity, and collateral>",
+
+  "lifestyle_vs_income_assessment": "<2-3 sentences: Do the home photos confirm the declared income? Is the applicant living above or below their means? Are they financially disciplined?>",
+
+  "repayment_capacity_analysis": "<2-3 sentences: Based on income data and EMI calculation, can this applicant realistically repay the loan? What is the safety margin?>",
+
+  "executive_summary": "<4-5 sentences covering the complete credit picture: identity, residence, income, lifestyle, location — and your final professional recommendation with reasoning>"
 }}
 """
 
@@ -326,9 +556,15 @@ async def comprehensive_credit_analysis(
 
     # Build context strings
     bi = meta.basic_info
+    loan_amt   = bi.loan_amount if bi else 0
+    loan_str   = (
+        f"Rs {loan_amt:,.0f}"
+        + (f"  ({loan_amt/100000:.1f} Lakh)" if loan_amt >= 100_000 else "")
+    ) if loan_amt else "Not specified"
     basic_str = (
         f"Name: {bi.first_name} {bi.last_name} | DOB: {bi.dob} | "
-        f"City: {bi.city} | Income Range: {bi.income_range} | PAN: {bi.pan_number}"
+        f"City: {bi.city} | Income Range: {bi.income_range} | PAN: {bi.pan_number} | "
+        f"Loan Requested: {loan_str}"
     ) if bi else "Not provided"
 
     qa_lines = "\n".join(
@@ -381,8 +617,9 @@ async def comprehensive_credit_analysis(
     )
 
     prompt = _CREDIT_PROMPT.format(
-        basic_info=basic_str, qa_text=qa_lines, photo_summary=photo_lines,
-        pan_summary=pan_str, nameplate_text=nameplate_str,
+        basic_info=basic_str,   loan_amount_str=loan_str,
+        qa_text=qa_lines,       photo_summary=photo_lines,
+        pan_summary=pan_str,    nameplate_text=nameplate_str,
         income_summary=income_str, location_summary=loc_str,
     )
 
@@ -423,7 +660,10 @@ async def analyze_all_images(
     logger.info("[OpenAI] Starting batch analysis of %d images", len(photo_entries))
 
     async def _analyse_one(entry: Dict[str, Any]) -> Dict[str, Any]:
-        analysis = await analyze_image(entry["file_path"], entry["prompt"])
+        analysis = await analyze_image(
+            entry["file_path"], entry.get("prompt", ""),
+            tag=entry.get("tag", ""),
+        )
         return {**entry, "analysis": analysis}
 
     results = await asyncio.gather(*[_analyse_one(e) for e in photo_entries])

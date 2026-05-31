@@ -54,6 +54,7 @@ async def save_session_data_json(
     pan_verification: Optional[Dict[str, Any]],
     nameplate_ocr:    Optional[Dict[str, Any]],
     income_analysis:  Optional[Dict[str, Any]],
+    credit_analysis:  Optional[Dict[str, Any]] = None,
 ) -> Path:
     """
     Write a comprehensive, denormalised session_data.json that is the single
@@ -141,6 +142,8 @@ async def save_session_data_json(
             "status":              "PASS" if geo_result.get("verified") else "FAIL",
             "details":             geo_result.get("details", []),
         },
+
+        "credit_analysis": credit_analysis or {},
     }
 
     folder = _session_folder(session_id)

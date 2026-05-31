@@ -146,8 +146,23 @@ _SCRIPT_COMMON = """
 function logout(){document.cookie='auditor_token=;max-age=0;path=/';location.href='/auditor/'}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
   .replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
-function fmtDate(iso){if(!iso)return'—';try{return new Date(iso).toLocaleString('en-IN')}catch{return iso}}
-function fmtDateOnly(iso){if(!iso)return'—';try{return new Date(iso).toLocaleDateString('en-IN')}catch{return iso}}
+function fmtDate(iso){
+  if(!iso) return '—';
+  try{
+    return new Date(iso).toLocaleString('en-IN',{
+      timeZone:'Asia/Kolkata',day:'2-digit',month:'short',year:'numeric',
+      hour:'2-digit',minute:'2-digit',hour12:true
+    }) + ' IST';
+  }catch{return iso;}
+}
+function fmtDateOnly(iso){
+  if(!iso) return '—';
+  try{
+    return new Date(iso).toLocaleDateString('en-IN',{
+      timeZone:'Asia/Kolkata',day:'2-digit',month:'short',year:'numeric'
+    });
+  }catch{return iso;}
+}
 </script>
 """
 
@@ -432,6 +447,7 @@ body{padding-bottom:90px}
   <a class="jump-link" href="#s-location">Location</a>
   <a class="jump-link" href="#s-credit">AI Credit</a>
   <a class="jump-link" href="#s-report">Report PDF</a>
+  <a class="jump-link" href="#s-recording">Recording</a>
 </div>
 <div class="page-section">
   <div id="loadMsg" style="text-align:center;padding:60px 0;color:#888">
@@ -442,7 +458,7 @@ body{padding-bottom:90px}
     <div id="s-overview"></div><div id="s-interview"></div>
     <div id="s-photos"></div><div id="s-pan"></div>
     <div id="s-income"></div><div id="s-location"></div>
-    <div id="s-credit"></div><div id="s-report"></div>
+    <div id="s-credit"></div><div id="s-report"></div><div id="s-recording"></div>
   </div>
 </div>
 <div class="decision-bar">
@@ -495,7 +511,7 @@ function renderAll(){
   const resp=D.responses||{};
   const panV=sd.pan_verification||tryJ(resp['pan_verification.json']);
   const incA=sd.income_document?.analysis||tryJ(resp['income_analysis.json']);
-  const credA=sd.credit_analysis||tryJ(resp['credit_analysis.json']);
+  const credA=sd.credit_analysis||D.credit_analysis||tryJ(resp['credit_analysis.json']);
   const geoR=sd.location||D.geo_result||{};
 
   document.getElementById('s-overview').innerHTML=bldOverview(D,bi,qs,photos,meta);
@@ -506,6 +522,7 @@ function renderAll(){
   document.getElementById('s-location').innerHTML=bldLocation(geoR);
   document.getElementById('s-credit').innerHTML=bldCredit(credA);
   document.getElementById('s-report').innerHTML=bldReport(D.report_url);
+  document.getElementById('s-recording').innerHTML=bldRecording(D,meta);
   document.getElementById('loadMsg').style.display='none';
   document.getElementById('allSecs').style.display='block';
 }
@@ -572,7 +589,7 @@ function bldPhotos(photos,cid){
         <div style="font-size:12px;color:#555;margin-top:4px">${esc(p.prompt)}</div>
         <div style="font-size:11px;margin-top:3px">${geo}</div>
         ${p.nameplate_ocr?.raw_text?`<div style="background:#E8F5E9;padding:6px;border-radius:4px;font-size:12px;margin-top:6px"><strong>Nameplate:</strong> ${esc(p.nameplate_ocr.raw_text)}</div>`:''}
-        ${p.analysis?`<div class="photo-analysis">${esc(p.analysis)}</div>`:''}
+        ${p.analysis?`<div class="photo-analysis">${formatAnalysis(p.analysis)}</div>`:''}
       </div></div>`;
   }).join('');
   return card('s-photos','Home Evidence',`<div class="photo-grid">${cards}</div>`);
@@ -704,6 +721,56 @@ function bldCredit(ca){
     </div>`);
 }
 
+function formatAnalysis(text){
+  if(!text) return '';
+  const lines = text.replace(new RegExp(String.fromCharCode(13),'g'),'').split(String.fromCharCode(10));
+  return lines.map(raw=>{
+    const line = raw.trim();
+    if(!line) return '';
+    const hdr = line.match(/^\*\*(.+?)\*\*[:\-]?\s*(.*)/);
+    if(hdr){
+      const k=hdr[1].replace(/\*+/g,'').trim();
+      const v=hdr[2].trim();
+      return `<div style="margin-top:5px"><span style="font-weight:700;color:#0D47A1">${esc(k)}:</span>${v?' '+esc(v):''}</div>`;
+    }
+    if(line.match(/^[-•*] /)){
+      const body=line.slice(2).trim();
+      if(body.includes(':')&&body.split(':')[0].length<20){
+        const idx2=body.indexOf(':');
+        const lbl=body.slice(0,idx2),rest=body.slice(idx2+1).trim();
+        return `<div style="padding-left:10px;margin:1px 0">&bull; <strong>${esc(lbl.trim())}:</strong> ${esc(rest)}</div>`;
+      }
+      return `<div style="padding-left:10px;margin:1px 0">&bull; ${esc(body)}</div>`;
+    }
+    if(/score|assessment/i.test(line)){
+      return `<div style="margin-top:5px;font-weight:700;color:#333">${esc(line.replace(/\*+/g,'').trim())}</div>`;
+    }
+    const clean=line.replace(/\*+/g,'').trim();
+    return clean?`<div style="margin:1px 0">${esc(clean)}</div>`:'';
+  }).join('');
+}
+function bldRecording(d,meta){
+  // Find recording filename from metadata or files list
+  const recName = (meta.recording_filename) ||
+    (d.session_data&&d.session_data.session&&d.session_data.session.recording) ||
+    (d.files||[]).find(f=>f.endsWith('.webm')||f.endsWith('.mp4')||f.endsWith('.ogg')) || '';
+  if(!recName) return card('s-recording','Session Recording',inc('No recording found for this session'));
+  const recUrl = `/storage/${d.case_id}/${recName}`;
+  return card('s-recording','Session Recording',`
+    <div style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <span style="font-size:13px;color:#555">${esc(recName)}</span>
+      <a href="${recUrl}" download class="btn btn-gold btn-sm">Download Recording</a>
+    </div>
+    <video controls preload="metadata"
+           style="width:100%;border-radius:8px;background:#000;max-height:480px;display:block">
+      <source src="${recUrl}" type="video/webm">
+      <source src="${recUrl}" type="video/mp4">
+      Your browser does not support the video element.
+    </video>
+    <div style="font-size:12px;color:#888;margin-top:6px">
+      Full session video+audio recording. Use the controls to play, pause, and seek.
+    </div>`);
+}
 function bldReport(url){
   if(!url) return card('s-report','Report PDF',inc('PDF not yet generated'));
   return card('s-report','Report PDF',`
@@ -867,15 +934,19 @@ async def api_case_detail(case_id: str, request: Request) -> Dict[str, Any]:
     decision_d   = _read_json(folder / "decision.json") or {}
 
     responses: Dict[str, str] = {}
-    geo_result = None
-    resp_dir   = folder / "responses"
+    geo_result      = None
+    credit_analysis = None
+    resp_dir = folder / "responses"
     if resp_dir.exists():
         for rf in resp_dir.iterdir():
             if rf.is_file():
                 try:
-                    responses[rf.name] = rf.read_text(encoding="utf-8")
+                    content = rf.read_text(encoding="utf-8")
+                    responses[rf.name] = content
                     if rf.name == "geo_verification.json":
-                        geo_result = json.loads(responses[rf.name])
+                        geo_result = json.loads(content)
+                    elif rf.name == "credit_analysis.json":
+                        credit_analysis = json.loads(content)
                 except Exception:
                     pass
 
@@ -894,19 +965,24 @@ async def api_case_detail(case_id: str, request: Request) -> Dict[str, Any]:
     if session_data:
         session_data["photos"] = photos
 
+    # credit_analysis: prefer session_data (future sessions), fall back to parsed JSON
+    if not session_data.get("credit_analysis") and credit_analysis:
+        session_data["credit_analysis"] = credit_analysis
+
     return {
-        "case_id":       case_id,
-        "metadata":      meta,
-        "session_data":  session_data,
-        "files":         files,
-        "responses":     {k: v for k, v in responses.items()
-                          if k not in ("pan_verification.json", "income_analysis.json",
-                                       "credit_analysis.json", "geo_verification.json")},
-        "geo_result":    geo_result,
-        "report_url":    f"/storage/{case_id}/{report_file}" if report_file else None,
-        "report_filename": report_file,
-        "decision":      decision_d.get("decision"),
-        "decision_notes": decision_d.get("notes"),
+        "case_id":          case_id,
+        "metadata":         meta,
+        "session_data":     session_data,
+        "files":            files,
+        "responses":        {k: v for k, v in responses.items()
+                             if k not in ("pan_verification.json", "income_analysis.json",
+                                          "credit_analysis.json", "geo_verification.json")},
+        "geo_result":       geo_result,
+        "credit_analysis":  credit_analysis,
+        "report_url":       f"/storage/{case_id}/{report_file}" if report_file else None,
+        "report_filename":  report_file,
+        "decision":         decision_d.get("decision"),
+        "decision_notes":   decision_d.get("notes"),
     }
 
 

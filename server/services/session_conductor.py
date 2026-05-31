@@ -177,8 +177,17 @@ async def _photo_phase(
     """
     logger.info("[Conductor] Photo phase: selfie=%s index=%d", is_selfie, photo_index)
 
-    await _send(ws, {"type": "announce_photo", "prompt": prompt, "is_selfie": is_selfie})
-    await _wait_tts_done(ws)   # Android speaks the prompt locally, signals done
+    # Synthesize with Polly so the same female voice is used for all prompts
+    audio_b64 = ""
+    try:
+        from services.aws_service import get_polly
+        audio_b64 = await get_polly().async_synthesize(prompt)
+    except Exception as exc:
+        logger.warning("[Conductor] Polly failed for photo prompt: %s", exc)
+
+    await _send(ws, {"type": "announce_photo", "prompt": prompt,
+                     "is_selfie": is_selfie, "audio": audio_b64})
+    await _wait_tts_done(ws)
 
     # Countdown
     for i in range(settings.fi_countdown_seconds, 0, -1):
@@ -275,29 +284,30 @@ async def _pan_photo_phase(ws: WebSocket, session_id: str) -> Optional[dict]:
         return {"filename": filename, "ocr": ocr}
 
 
-# ── Income document helper ────────────────────────────────────────────────────
+# ── Bank statement consent helper ─────────────────────────────────────────────
 
-async def _request_document_phase(ws: WebSocket) -> None:
+async def _request_consent_phase(ws: WebSocket) -> None:
     """
-    Ask the field officer to upload the applicant's last-year bank statement.
-    Waits up to 5 minutes for document_ready or document_skipped.
+    Request applicant's consent to retrieve bank statement from their bank.
+    Bank statements are pulled server-side from the vault folder after submit —
+    no file upload from the user is needed.
+    Waits up to 60 s for consent_given or consent_declined.
     """
-    prompt = (
-        "Income Verification: Please upload the applicant's last one-year bank statement "
-        "as a PDF file. Tap 'Upload PDF' to select the file, or 'Skip' to proceed without it."
-    )
     await _send(ws, {
-        "type":          "request_document",
-        "document_type": "bank_statement",
-        "prompt":        prompt,
+        "type":    "request_consent",
+        "purpose": "bank_statement",
+        "message": (
+            "To complete your loan application, ABC Bank needs to retrieve "
+            "your last 12 months' bank statement directly from your bank. "
+            "Your data is secure and used only for this loan assessment."
+        ),
     })
-    logger.info("[Conductor] Waiting for income document upload (timeout=300s)")
-    msg = await _recv_json(ws, timeout=300.0)
-    if msg and msg.get("type") == "document_ready":
-        logger.info("[Conductor] Income document uploaded: %s", msg.get("filename"))
+    logger.info("[Conductor] Waiting for bank statement consent")
+    msg = await _recv_json(ws, timeout=60.0)
+    if msg and msg.get("type") == "consent_given":
+        logger.info("[Conductor] Consent given — bank statement will be retrieved after submit")
     else:
-        logger.info("[Conductor] Income document skipped or timed out (type=%s)",
-                    msg.get("type") if msg else "timeout")
+        logger.info("[Conductor] Consent declined or timed out — income analysis will be skipped")
 
 
 # ── Main conductor ────────────────────────────────────────────────────────────
@@ -370,8 +380,8 @@ async def conduct_fi_session(ws: WebSocket, session_id: str) -> None:
         # ── PAN card photo (with inline OCR retry) ───────────────────────────
         await _pan_photo_phase(ws, session_id)
 
-        # ── Income document upload ────────────────────────────────────────────
-        await _request_document_phase(ws)
+        # ── Bank statement consent ────────────────────────────────────────────
+        await _request_consent_phase(ws)
 
         # Tell Android the interview is complete — officer will tap Submit
         await _send(ws, {
