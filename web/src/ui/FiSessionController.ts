@@ -74,7 +74,6 @@ export class FiSessionController {
 
   // Timers
   private listenTimerId:   number | null = null;
-  private listenTickId:    number | null = null;   // per-second recording countdown
 
   constructor(opts: ControllerOptions) {
     this._opts      = opts;
@@ -192,37 +191,50 @@ export class FiSessionController {
         FiLog.i('Controller', `Listening Q${qIdx}  engine=${FiConfig.transcribeEngine}  timeout=${timeoutMs}ms`);
 
         // Show "speak now" and start recording IMMEDIATELY — GPS fetched in background
-        const totalSecs = Math.ceil(timeoutMs / 1_000);
-        let remainingSecs = totalSecs;
-        this.emitAndTrack({ kind: 'Listening', questionIndex: qIdx, remaining: remainingSecs });
+        this.emitAndTrack({ kind: 'Listening', questionIndex: qIdx });
 
         // GPS in background so it never blocks recording start
         this.location.getLocation().then(geo => { this.pendingAnswerGeo = geo; });
 
-        this._clearListenTick();
-        this.listenTickId = window.setInterval(() => {
-          remainingSecs = Math.max(0, remainingSecs - 1);
-          this.emitAndTrack({ kind: 'Listening', questionIndex: qIdx, remaining: remainingSecs });
-        }, 1_000);
+        // End recording early if silence > 3 s after first speech is detected
+        let silenceDurationMs = 0;
+        let hasSpeech         = false;
+        let silenceTriggered  = false;
+
+        const onChunkSilence = (chunk: ArrayBuffer): void => {
+          if (silenceTriggered) return;
+          if (!_isSilentPcm(chunk)) { hasSpeech = true; silenceDurationMs = 0; return; }
+          if (!hasSpeech) return;
+          silenceDurationMs += 100;
+          if (silenceDurationMs >= 3_000) {
+            silenceTriggered = true;
+            FiLog.i('Controller', `3 s silence Q${qIdx} — ending early`);
+            this._clearListenTimer();
+            this.recorder.stop();
+            if (FiConfig.transcribeEngine === 'sarvam') {
+              this.sarvam.triggerFlush();
+            } else {
+              this.ws.sendJson({ type: 'audio_end' });
+            }
+          }
+        };
 
         if (FiConfig.transcribeEngine === 'sarvam') {
           const text = await this.sarvam.listen(
             timeoutMs,
-            (onChunk) => this.recorder.start(onChunk),
+            (onChunk) => this.recorder.start((chunk) => { onChunkSilence(chunk); onChunk(chunk); }),
             ()        => this.recorder.stop(),
             (partial) => this.emitAndTrack({ kind: 'ShowTranscript', text: partial, isFinal: false }),
           );
-          this._clearListenTick();
           this.recorder.stop();
           FiLog.i('Controller', `Sarvam transcript Q${qIdx}: '${text}'`);
           this.ws.sendJson({ type: 'transcript_result', question_index: qIdx, text });
         } else {
           // AWS path — send raw PCM to server
-          this.recorder.start((chunk) => { this.ws.sendBinary(chunk); });
+          this.recorder.start((chunk) => { this.ws.sendBinary(chunk); onChunkSilence(chunk); });
           this._clearListenTimer();
           this.listenTimerId = window.setTimeout(() => {
             FiLog.i('Controller', 'Listen timeout → audio_end');
-            this._clearListenTick();
             this.recorder.stop();
             this.ws.sendJson({ type: 'audio_end' });
           }, timeoutMs);
@@ -237,7 +249,6 @@ export class FiSessionController {
 
         if (isFinal) {
           this._clearListenTimer();
-          this._clearListenTick();
           this._startConfirm(text);
         } else {
           this.emitAndTrack({ kind: 'ShowTranscript', text, isFinal: false });
@@ -539,13 +550,8 @@ export class FiSessionController {
     if (this.listenTimerId !== null) { clearTimeout(this.listenTimerId); this.listenTimerId = null; }
   }
 
-  private _clearListenTick(): void {
-    if (this.listenTickId !== null) { clearInterval(this.listenTickId); this.listenTickId = null; }
-  }
-
   destroy(): void {
     this._clearListenTimer();
-    this._clearListenTick();
     this._clearConfirmTimer();
     this.sarvam.close();
     this.recorder.destroy();
@@ -553,6 +559,15 @@ export class FiSessionController {
     this.tts.stop();
     this.ws.close();
   }
+}
+
+/** Returns true if the 16-bit PCM chunk RMS is below the silence threshold. */
+function _isSilentPcm(chunk: ArrayBuffer, threshold = 500): boolean {
+  const samples = new Int16Array(chunk);
+  if (samples.length === 0) return true;
+  let sumSq = 0;
+  for (let i = 0; i < samples.length; i++) sumSq += samples[i] * samples[i];
+  return Math.sqrt(sumSq / samples.length) < threshold;
 }
 
 function _timestamp(): string {

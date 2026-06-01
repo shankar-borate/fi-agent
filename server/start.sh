@@ -182,11 +182,13 @@ elif [ "$MODE" = "bg" ]; then
         --workers 1 \
         >> "$LOGFILE" 2>&1 &
 
-    echo $! > "$PIDFILE"
+    BG_PID=$!
+    disown "$BG_PID"          # detach from shell — survives console close
+    echo "$BG_PID" > "$PIDFILE"
     sleep 1   # give uvicorn a moment to start
 
-    if kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
-        ok "START" "Server started in background — pid $(cat $PIDFILE)"
+    if kill -0 "$BG_PID" 2>/dev/null; then
+        ok "START" "Server started in background — pid $BG_PID"
         echo ""
         echo    "   Log file:  $(pwd)/$LOGFILE"
         echo    "   Tail logs: tail -f $LOGFILE"

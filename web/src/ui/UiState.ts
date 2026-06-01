@@ -4,7 +4,7 @@ import { GeoPoint } from '../domain/models';
 export type UiState =
   | { kind: 'Connecting' }
   | { kind: 'ShowMessage';    text: string }
-  | { kind: 'Listening';      questionIndex: number; remaining: number }
+  | { kind: 'Listening';      questionIndex: number }
   | { kind: 'ShowTranscript'; text: string; isFinal: boolean }
   | { kind: 'ConfirmAnswer';    text: string; remaining: number; geo: GeoPoint | null }
   | { kind: 'ConsentRequest';   message: string }

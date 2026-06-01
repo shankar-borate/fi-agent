@@ -14,6 +14,7 @@ type OnPartial      = (text: string) => void;
  */
 export class SarvamSTTService {
   private ws: WebSocket | null = null;
+  private flushTimer: number | null = null;
 
   async listen(
     timeoutMs:      number,
@@ -32,13 +33,12 @@ export class SarvamSTTService {
       const ws    = new WebSocket(wsUrl);
       this.ws     = ws;
       const parts: string[] = [];
-      let   timer: number | null = null;
       let   done  = false;
 
       const finish = (reason: string) => {
         if (done) return;
         done = true;
-        if (timer !== null) { clearTimeout(timer); timer = null; }
+        if (this.flushTimer !== null) { clearTimeout(this.flushTimer); this.flushTimer = null; }
         stopRecording();
         FiLog.i('SarvamSTT', `Done (${reason}) — transcript: "${parts.join(' ').trim()}"`);
         resolve(parts.join(' ').trim() || '(no answer)');
@@ -52,8 +52,9 @@ export class SarvamSTTService {
           if (ws.readyState === WebSocket.OPEN) ws.send(chunk);
         });
 
-        timer = window.setTimeout(() => {
+        this.flushTimer = window.setTimeout(() => {
           FiLog.i('SarvamSTT', 'Timeout — flushing');
+          this.flushTimer = null;
           stopRecording();
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'flush' }));
@@ -82,7 +83,16 @@ export class SarvamSTTService {
     });
   }
 
+  triggerFlush(): void {
+    if (this.flushTimer !== null) { clearTimeout(this.flushTimer); this.flushTimer = null; }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      FiLog.i('SarvamSTT', 'Early flush — silence detected');
+      this.ws.send(JSON.stringify({ type: 'flush' }));
+    }
+  }
+
   close(): void {
+    if (this.flushTimer !== null) { clearTimeout(this.flushTimer); this.flushTimer = null; }
     this.ws?.close();
     this.ws = null;
   }

@@ -99,9 +99,6 @@ export class FiSessionUI {
         this.tvTranscript.classList.remove('final');
         this._show(this.tvTranscript);
         this._show(this.ivMicIndicator);
-        this.tvCountdown.textContent = `${state.remaining}s`;
-        this.tvCountdown.classList.add('countdown-recording');
-        this._show(this.tvCountdown);
         break;
 
       case 'ShowTranscript':
