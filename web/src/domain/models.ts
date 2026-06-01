@@ -13,6 +13,7 @@ export interface BasicInfo {
   panNumber:    string;
   mobileNumber: string;
   incomeRange:  string;
+  loanAmount:   number;   // in INR
 }
 
 export interface QuestionAnswer {

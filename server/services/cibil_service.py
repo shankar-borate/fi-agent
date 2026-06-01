@@ -19,6 +19,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -121,13 +123,14 @@ async def get_cibil_score(
         "pan_number":       pan_number,
         "bureau":           "TransUnion CIBIL",
         "report_date":      datetime.now(timezone.utc).strftime("%d %b %Y"),
-        "loan_eligible":    score >= 650,
+        "loan_eligible":    score >= settings.fi_cibil_threshold,
+        "cibil_threshold":  settings.fi_cibil_threshold,
         "recommendation": (
-            "Approved — excellent credit profile"      if score >= 800 else
-            "Approved — good credit profile"           if score >= 750 else
-            "Approved — standard terms apply"          if score >= 700 else
-            "Conditional approval — verify income"     if score >= 650 else
-            "Refer to credit committee"                if score >= 600 else
+            "Approved — excellent credit profile"  if score >= 800 else
+            "Approved — good credit profile"       if score >= settings.fi_cibil_threshold else
+            "Approved — standard terms apply"      if score >= 700 else
+            "Conditional approval — verify income" if score >= 650 else
+            "Refer to credit committee"            if score >= 600 else
             "Decline — insufficient credit history"
         ),
     }

@@ -37,9 +37,113 @@ let capturedBasicInfo: BasicInfo | null = null;
 
 // ── Marketing screen ────────────────────────────────────────────────────────
 
+// ── OTP flow ────────────────────────────────────────────────────────────────
+
+
 document.getElementById('btnApply')!.addEventListener('click', () => {
   hide('screenMarketing');
-  show('screenForm');
+  show('screenOTP');
+  // Reset OTP screen to step 1
+  show('otpStep1');
+  hide('otpStep2');
+  hide('otpStep3');
+  (document.getElementById('otpMobile') as HTMLInputElement).value = '';
+  (document.getElementById('otpMobileErr') as HTMLElement).classList.add('hidden');
+});
+
+document.getElementById('btnBackOTPToMarketing')!.addEventListener('click', () => {
+  hide('screenOTP');
+  show('screenMarketing');
+});
+
+document.getElementById('btnSendOTP')!.addEventListener('click', () => {
+  const mobile = (document.getElementById('otpMobile') as HTMLInputElement).value.trim();
+  const err    = document.getElementById('otpMobileErr')!;
+  const btn    = document.getElementById('btnSendOTP') as HTMLButtonElement;
+
+  if (!/^[6-9][0-9]{9}$/.test(mobile)) {
+    err.textContent = 'Enter a valid 10-digit Indian mobile number.';
+    err.classList.remove('hidden');
+    return;
+  }
+  err.classList.add('hidden');
+  btn.disabled    = true;
+  btn.textContent = 'Sending…';
+
+  // ── Step 1 → 2: simulate SMS dispatch (2s delay) ──────────────────────
+  window.setTimeout(() => {
+    hide('otpStep1');
+    show('otpStep2');
+
+    const masked = `+91 ${mobile.slice(0,3)}XXXXXXX`;
+    document.getElementById('otpSentMsg')!.textContent =
+      `OTP has been sent to ${masked} via SMS`;
+    document.getElementById('otpFillingMsg')!.textContent = 'Waiting for OTP…';
+
+    // Clear boxes
+    for (let i = 0; i < 6; i++) {
+      const box = document.getElementById(`otp${i}`) as HTMLInputElement;
+      box.value = '';
+      box.classList.remove('filled', 'masked');
+    }
+
+    // ── After 5s: auto-fill boxes with * one by one ────────────────────
+    window.setTimeout(() => {
+      document.getElementById('otpFillingMsg')!.textContent = 'OTP received — verifying…';
+
+      for (let i = 0; i < 6; i++) {
+        window.setTimeout(() => {
+          const box = document.getElementById(`otp${i}`) as HTMLInputElement;
+          box.value = '*';
+          box.classList.add('masked');
+
+          // After last box: show verified state, then auto-advance
+          if (i === 5) {
+            window.setTimeout(() => {
+              document.getElementById('otpFillingMsg')!.textContent = 'OTP verified ✓';
+
+              // ── After 1.5s: move to verified screen ───────────────────
+              window.setTimeout(() => {
+                hide('otpStep2');
+                show('otpStep3');
+                document.getElementById('otpVerifiedMsg')!.textContent =
+                  `+91 ${mobile} has been verified. Proceeding to your application…`;
+
+                // ── After 2s: open form with mobile pre-filled ─────────
+                window.setTimeout(() => {
+                  hide('screenOTP');
+                  show('screenForm');
+                  const mobileEl = document.getElementById('mobileNumber') as HTMLInputElement;
+                  mobileEl.value    = mobile;
+                  mobileEl.readOnly = true;
+                  btn.disabled    = false;
+                  btn.textContent = 'Get OTP';
+                }, 2_000);
+
+              }, 1_500);
+            }, 500);
+          }
+        }, i * 200);   // stagger * appearance by 200ms each
+      }
+    }, 5_000);   // 5s wait before OTP auto-fills
+
+  }, 2_000);   // 2s delay simulating SMS dispatch
+});
+
+// Live loan amount hint
+document.getElementById('loanAmount')!.addEventListener('input', (e) => {
+  const val   = parseInt((e.target as HTMLInputElement).value, 10);
+  const hint  = document.getElementById('loanAmountHint')!;
+  if (!val || val < 10_000) {
+    hint.textContent = 'Minimum loan amount: ₹10,000';
+    hint.className   = 'form-hint';
+  } else if (val > 500_000) {
+    hint.textContent = `₹ ${val.toLocaleString('en-IN')} — Video PD process (above ₹5 Lakh)`;
+    hint.className   = 'form-hint warn';
+  } else {
+    hint.textContent = `₹ ${val.toLocaleString('en-IN')} — Field Investigation process`;
+    hint.className   = 'form-hint';
+  }
 });
 
 // ── Application form ────────────────────────────────────────────────────────
@@ -63,6 +167,7 @@ document.getElementById('loanForm')!.addEventListener('submit', (e) => {
   const panNumber    = get('panNumber').toUpperCase();
   const mobileNumber = get('mobileNumber');
   const incomeRange  = get('incomeRange');
+  const loanAmount   = parseInt((document.getElementById('loanAmount') as HTMLInputElement).value, 10);
 
   // Validate
   if (!firstName || !lastName) { showError('formError', 'Please enter your full name.'); return; }
@@ -73,23 +178,29 @@ document.getElementById('loanForm')!.addEventListener('submit', (e) => {
     showError('formError', 'PAN number format is invalid (e.g. ABCDE1234F).');
     return;
   }
-  if (!/^[6-9][0-9]{9}$/.test(mobileNumber)) {
-    showError('formError', 'Mobile number must be a valid 10-digit Indian number.');
+  // Mobile is already OTP-verified — just sanity check it's present
+  if (!mobileNumber || mobileNumber.length !== 10) {
+    showError('formError', 'Mobile number is missing. Please restart the application.');
     return;
   }
   if (!incomeRange) { showError('formError', 'Please select your income range.'); return; }
+  if (!loanAmount || loanAmount < 10_000) {
+    showError('formError', 'Please enter a valid loan amount (minimum ₹10,000).');
+    return;
+  }
 
-  capturedBasicInfo = { firstName, lastName, dob, address, city, panNumber, mobileNumber, incomeRange };
+  capturedBasicInfo = { firstName, lastName, dob, address, city, panNumber, mobileNumber, incomeRange, loanAmount };
 
   // Populate review table
   const pairs: [string, string][] = [
-    ['Full Name',       `${firstName} ${lastName}`],
-    ['Date of Birth',   dob],
-    ['Address',         address],
-    ['City',            city],
-    ['PAN Number',      panNumber],
-    ['Mobile Number',   mobileNumber],
-    ['Annual Income',   incomeRange],
+    ['Full Name',        `${firstName} ${lastName}`],
+    ['Date of Birth',    dob],
+    ['Address',          address],
+    ['City',             city],
+    ['PAN Number',       panNumber],
+    ['Mobile Number',    mobileNumber],
+    ['Annual Income',    incomeRange],
+    ['Loan Amount',      `₹ ${loanAmount.toLocaleString('en-IN')}`],
   ];
   const table = document.getElementById('reviewTable')!;
   table.innerHTML = pairs.map(([k, v]) =>
@@ -113,6 +224,19 @@ document.getElementById('btnBackToForm')!.addEventListener('click', () => {
 document.getElementById('btnStartFI')!.addEventListener('click', () => {
   if (!capturedBasicInfo) { hide('screenReview'); show('screenForm'); return; }
   clearError('reviewError');
+
+  // Route based on loan amount
+  const FIELD_INVESTIGATION_LIMIT = 500_000;   // ₹5 Lakh
+  if (capturedBasicInfo.loanAmount > FIELD_INVESTIGATION_LIMIT) {
+    // Show Video PD coming-soon screen
+    const card = document.getElementById('vpdAmountCard')!;
+    card.textContent = `₹ ${capturedBasicInfo.loanAmount.toLocaleString('en-IN')}`;
+    hide('screenReview');
+    show('screenVideoPD');
+    return;
+  }
+
+  // ≤ ₹5 Lakh → start Field Investigation
   const btn = document.getElementById('btnStartFI') as HTMLButtonElement;
   btn.disabled    = true;
   btn.textContent = 'Starting…';
@@ -121,6 +245,20 @@ document.getElementById('btnStartFI')!.addEventListener('click', () => {
     btn.textContent = 'Start Field Investigation';
     showError('reviewError', (err as Error).message);
   });
+});
+
+// ── Video PD navigation ────────────────────────────────────────────────────
+document.getElementById('btnBackFromVideoPD')!.addEventListener('click', () => {
+  hide('screenVideoPD');
+  show('screenReview');
+});
+document.getElementById('btnReduceAmount')!.addEventListener('click', () => {
+  hide('screenVideoPD');
+  hide('screenReview');
+  show('screenForm');
+  // Clear loan amount field so user re-enters
+  (document.getElementById('loanAmount') as HTMLInputElement).value = '';
+  (document.getElementById('loanAmountHint') as HTMLElement).textContent = 'Enter amount in rupees';
 });
 
 // ── FI boot ─────────────────────────────────────────────────────────────────

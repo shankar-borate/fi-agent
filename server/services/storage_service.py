@@ -55,6 +55,7 @@ async def save_session_data_json(
     nameplate_ocr:    Optional[Dict[str, Any]],
     income_analysis:  Optional[Dict[str, Any]],
     credit_analysis:  Optional[Dict[str, Any]] = None,
+    cibil_score:      Optional[Dict[str, Any]] = None,
 ) -> Path:
     """
     Write a comprehensive, denormalised session_data.json that is the single
@@ -110,6 +111,14 @@ async def save_session_data_json(
             "ended_at":    meta.ended_at,
             "device_id":   meta.device_id or "",
             "recording":   meta.recording_filename or "",
+            "device_info": {
+                "browser":      meta.device_info.browser      if meta.device_info else "",
+                "os":           meta.device_info.os           if meta.device_info else "",
+                "device_type":  meta.device_info.device_type  if meta.device_info else "",
+                "screen_size":  meta.device_info.screen_size  if meta.device_info else "",
+                "language":     meta.device_info.language     if meta.device_info else "",
+                "user_agent":   meta.device_info.user_agent   if meta.device_info else "",
+            },
         },
 
         "interview": [
@@ -144,6 +153,7 @@ async def save_session_data_json(
         },
 
         "credit_analysis": credit_analysis or {},
+        "cibil_score":     cibil_score     or {},
     }
 
     folder = _session_folder(session_id)

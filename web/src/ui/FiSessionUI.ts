@@ -25,9 +25,10 @@ export class FiSessionUI {
   private readonly popupGeo:         HTMLElement;
   private popupPhotoUrl:             string | null = null;
 
+  private readonly consentScreen: HTMLElement;
+  private readonly consentBody:   HTMLElement;
+
   private currentPhotoUrl: string | null = null;
-  private _lastState: UiState['kind']  = 'Connecting';
-  private readonly fileInput: HTMLInputElement;
 
   constructor(controller: FiSessionController) {
     this.controller = controller;
@@ -51,33 +52,18 @@ export class FiSessionUI {
     this.popupImage       = document.getElementById('popupImage')       as HTMLImageElement;
     this.popupGeo         = document.getElementById('popupGeo')         as HTMLElement;
 
+    this.consentScreen = document.getElementById('consentScreen') as HTMLElement;
+    this.consentBody   = document.getElementById('consentBody')   as HTMLElement;
+
     // Popup buttons wire to same controller methods
-    document.getElementById('btnPopupSave')!.addEventListener('click', () => this.controller.onSave());
+    document.getElementById('btnPopupSave')!.addEventListener('click',    () => this.controller.onSave());
     document.getElementById('btnPopupDiscard')!.addEventListener('click', () => this.controller.onDiscard());
 
-    // Hidden file input for PDF document upload
-    this.fileInput = document.createElement('input');
-    this.fileInput.type   = 'file';
-    this.fileInput.accept = '.pdf,application/pdf';
-    this.fileInput.style.display = 'none';
-    document.body.appendChild(this.fileInput);
-    this.fileInput.addEventListener('change', () => {
-      const file = this.fileInput.files?.[0];
-      if (file) {
-        this.controller.onDocumentSelected(file).catch(
-          e => FiLog.e('UI', 'Document select error', e),
-        );
-      }
-      this.fileInput.value = '';   // reset so the same file can be re-selected
-    });
+    // Consent buttons
+    document.getElementById('btnConsentAgree')!.addEventListener('click',   () => this.controller.onSave());
+    document.getElementById('btnConsentDecline')!.addEventListener('click', () => this.controller.onDiscard());
 
-    this.btnSave.addEventListener('click', () => {
-      if (this._lastState === 'UploadDocument') {
-        this.fileInput.click();    // open OS file picker
-      } else {
-        this.controller.onSave();
-      }
-    });
+    this.btnSave.addEventListener('click', () => this.controller.onSave());
     this.btnDiscard.addEventListener('click', () => this.controller.onDiscard());
     this.btnSubmit.addEventListener('click',  () => {
       this.controller.submitSession().catch(e => FiLog.e('UI', 'Submit error', e));
@@ -86,7 +72,6 @@ export class FiSessionUI {
 
   render(state: UiState): void {
     FiLog.d('UI', `render: ${state.kind}`);
-    this._lastState = state.kind;
 
     // Reset button labels before per-state overrides
     this.btnSave.textContent    = 'Save';
@@ -109,6 +94,10 @@ export class FiSessionUI {
       case 'Listening':
         this._showLive();
         this._hideAll();
+        // Question stays in tvMessage. Show recording status in transcript slot.
+        this.tvTranscript.textContent = '🔴  Recording — please speak now';
+        this.tvTranscript.classList.remove('final');
+        this._show(this.tvTranscript);
         this._show(this.ivMicIndicator);
         this.tvCountdown.textContent = `${state.remaining}s`;
         this.tvCountdown.classList.add('countdown-recording');
@@ -119,7 +108,10 @@ export class FiSessionUI {
         this._showLive();
         this._hideAll();
         this._show(this.ivMicIndicator);
-        this.tvTranscript.textContent = state.text;
+        // Show partial text; prefix with mic icon so it's clear words are being heard
+        this.tvTranscript.textContent = state.isFinal
+          ? state.text
+          : (state.text ? `🎙 ${state.text}` : '🔴  Recording — please speak now');
         this.tvTranscript.classList.toggle('final', state.isFinal);
         this._show(this.tvTranscript);
         break;
@@ -128,10 +120,7 @@ export class FiSessionUI {
         this._showLive();
         this._showMessage(`Did you say:\n"${state.text}"`);
         this._hideAll();
-        this.tvCountdown.textContent = `${state.remaining}s`;
-        this.tvCountdown.classList.remove('countdown-recording');
-        this._show(this.tvCountdown);
-        // GPS below the answer
+        // No countdown — show GPS only if available
         if (state.geo) {
           this.tvTranscript.textContent =
             `📍 Lat: ${state.geo.latitude.toFixed(5)},  Long: ${state.geo.longitude.toFixed(5)}`;
@@ -144,18 +133,17 @@ export class FiSessionUI {
         break;
       }
 
-      case 'UploadDocument':
-        this._showLive();
-        this._showMessage(state.prompt);
+      case 'ConsentRequest':
+        // Full-screen consent — hide camera, show dedicated consent card
+        this.videoPreview.classList.add('hidden');
         this._hideAll();
-        this.btnSave.textContent    = 'Upload PDF';
-        this.btnDiscard.textContent = 'Skip';
-        this._show(this.layoutReview);
+        this._showConsent(state.message);
         break;
 
-      case 'UploadingDocument':
-        this._showLive();
-        this._showMessage('Uploading bank statement…');
+      case 'ConsentProcessing':
+        this._hideConsent();
+        this.videoPreview.classList.remove('hidden');
+        this._showMessage('Retrieving your bank statement securely…');
         this._hideAll();
         this._show(this.progressBar);
         break;
@@ -176,19 +164,19 @@ export class FiSessionUI {
         break;
 
       case 'ReviewPhoto': {
-        // Show camera behind the popup (video visible as background)
         this._showLive();
         this._hideAll();
-        // Populate popup
         this._revokePopupUrl();
-        this.popupPhotoUrl = URL.createObjectURL(state.blob);
+        this.popupPhotoUrl  = URL.createObjectURL(state.blob);
         this.popupImage.src = this.popupPhotoUrl;
         this.popupHeader.textContent =
-          (state.isSelfie ? 'Selfie' : state.prompt.slice(0, 60)) +
-          '  —  5s auto-save';
+          (state.isSelfie ? 'Selfie' : state.prompt.slice(0, 55)) +
+          '  —  Review before saving';
         this.popupGeo.textContent = state.geo
           ? `📍 Lat: ${state.geo.latitude.toFixed(5)},  Long: ${state.geo.longitude.toFixed(5)}`
           : '';
+        this.btnSave.textContent    = '✓ Save Photo';
+        this.btnDiscard.textContent = '✗ Retake';
         this._show(this.photoReviewPopup);
         break;
       }
@@ -258,6 +246,16 @@ export class FiSessionUI {
     this._hide(this.thankyou);
     this._hide(this.photoReviewPopup);
     this._revokePopupUrl();
+    this._hideConsent();
+  }
+
+  private _showConsent(message: string): void {
+    this.consentBody.textContent = message;
+    this._show(this.consentScreen);
+  }
+
+  private _hideConsent(): void {
+    this._hide(this.consentScreen);
   }
 
   private _revokePopupUrl(): void {

@@ -320,6 +320,7 @@ class ReportPipeline:
             self.nameplate_ocr,
             self.income_analysis,
             self.credit_analysis,
+            self.cibil_score,
         )
 
     # ── Step 9: Generate PDF ────────────────────────────────────────────────

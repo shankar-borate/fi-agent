@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # Google Maps — reverse geocoding for Location Report
     google_maps_api_key: str = ""
 
+    # Credit thresholds (configurable)
+    fi_cibil_threshold:      int   = 800   # score >= this is shown as "Good" in green
+    fi_face_match_threshold: float = 30.0  # Rekognition similarity % to call it a match
+
     # Bank statement vault — PDFs stored as {vault_root}/{mobile_number}/*.pdf
     # The pipeline reads these automatically after submit (no user upload needed).
     fi_bank_vault_root: str = "D:\\bank-vault"

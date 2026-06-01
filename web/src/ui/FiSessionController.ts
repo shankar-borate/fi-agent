@@ -7,6 +7,7 @@ import { LocationHelper }     from '../services/LocationHelper';
 import { CameraManager }      from '../services/CameraManager';
 import { SessionRecorder }    from '../services/SessionRecorder';
 import { SarvamSTTService }   from '../services/SarvamSTTService';
+import { DeviceDetector }     from '../services/DeviceDetector';
 import { FiSessionRepository } from '../data/FiSessionRepository';
 import { FiConfig }           from '../config/FiConfig';
 import { BasicInfo, QuestionAnswer, PhotoCapture, DocumentCapture, GeoPoint } from '../domain/models';
@@ -42,14 +43,15 @@ export class FiSessionController {
   private readonly sessionRec: SessionRecorder;
   private readonly onCapture:  () => Promise<Blob>;
   private readonly emitState:  (s: UiState) => void;
+  private readonly _opts:      ControllerOptions;
 
   // Session-level collected data
   private answers:   QuestionAnswer[]   = [];
   private photos:    PhotoCapture[]     = [];
   private documents: DocumentCapture[]  = [];
 
-  // Current document upload context
-  private currentDocumentType = '';
+
+  private recordingStarted     = false;   // starts on first question, not on construction
 
   // Current question context
   private currentQuestion      = '';
@@ -73,9 +75,9 @@ export class FiSessionController {
   // Timers
   private listenTimerId:   number | null = null;
   private listenTickId:    number | null = null;   // per-second recording countdown
-  private reviewTimerId:   number | null = null;
 
   constructor(opts: ControllerOptions) {
+    this._opts      = opts;
     this.caseId     = opts.caseId;
     this.deviceId   = opts.deviceId;
     this.basicInfo  = opts.basicInfo;
@@ -102,8 +104,7 @@ export class FiSessionController {
     // Prepare AudioRecorder with microphone stream
     this.recorder.prepare(opts.audioStream).catch(e => FiLog.e('Controller', 'AudioRecorder prepare failed', e));
 
-    // Start session recording (video+audio when captureStream is supported)
-    this.sessionRec.start(opts.audioStream, opts.videoElement);
+    // Recording starts the moment the first question is asked — see _handleMessage 'question'
   }
 
   connect(): void {
@@ -121,11 +122,21 @@ export class FiSessionController {
 
   private async _onOpen(): Promise<void> {
     FiLog.i('Controller', 'WS open — sending ready');
+    const dev = DeviceDetector.detect();
+    FiLog.i('Controller', `Device: ${dev.deviceType} | ${dev.os} | ${dev.browser}`);
     this.ws.sendJson({
       type:       'ready',
       session_id: this.caseId,
       device_id:  this.deviceId,
       started_at: this.startedAt,
+      device_info: {
+        user_agent:   dev.userAgent,
+        browser:      dev.browser,
+        os:           dev.os,
+        device_type:  dev.deviceType,
+        screen_size:  dev.screenSize,
+        language:     dev.language,
+      },
       basic_info: {
         first_name:    this.basicInfo.firstName,
         last_name:     this.basicInfo.lastName,
@@ -135,6 +146,7 @@ export class FiSessionController {
         pan_number:    this.basicInfo.panNumber,
         mobile_number: this.basicInfo.mobileNumber,
         income_range:  this.basicInfo.incomeRange,
+        loan_amount:   this.basicInfo.loanAmount,
       },
     });
   }
@@ -153,6 +165,14 @@ export class FiSessionController {
         this.lastQuestionAudio    = msg['audio'] as string ?? '';
         this.lastPrompt = this.currentQuestion;
         FiLog.i('Controller', `Q${this.currentQuestionIndex + 1}: ${this.currentQuestion}`);
+
+        // Start session recording the instant the first question is asked — no gap
+        if (!this.recordingStarted) {
+          this.recordingStarted = true;
+          this.sessionRec.start(this._opts.audioStream, this._opts.videoElement);
+          FiLog.i('Controller', 'Session recording started with first question');
+        }
+
         this.emitAndTrack({ kind: 'ShowMessage', text: this.currentQuestion });
         await this._speak(this.currentQuestion, this.lastQuestionAudio);
         this.ws.sendJson({ type: 'tts_done' });
@@ -171,18 +191,13 @@ export class FiSessionController {
         const timeoutMs = msg['timeout_ms']     as number ?? FiConfig.sttTimeoutMs;
         FiLog.i('Controller', `Listening Q${qIdx}  engine=${FiConfig.transcribeEngine}  timeout=${timeoutMs}ms`);
 
-        // ── Pre-recording "get ready" countdown: 3 … 2 … 1 ──────────────
-        for (let i = 3; i >= 1; i--) {
-          this.emitAndTrack({ kind: 'Countdown', remaining: i, prompt: this.currentQuestion });
-          await new Promise<void>(r => window.setTimeout(r, 1_000));
-        }
-
-        this.pendingAnswerGeo = await this.location.getLocation();
-
-        // ── Recording countdown ticker ────────────────────────────────────
+        // Show "speak now" and start recording IMMEDIATELY — GPS fetched in background
         const totalSecs = Math.ceil(timeoutMs / 1_000);
         let remainingSecs = totalSecs;
         this.emitAndTrack({ kind: 'Listening', questionIndex: qIdx, remaining: remainingSecs });
+
+        // GPS in background so it never blocks recording start
+        this.location.getLocation().then(geo => { this.pendingAnswerGeo = geo; });
 
         this._clearListenTick();
         this.listenTickId = window.setInterval(() => {
@@ -237,12 +252,11 @@ export class FiSessionController {
         break;
       }
 
-      case 'request_document': {
-        const prompt   = msg['prompt']        as string ?? 'Please upload bank statement (PDF)';
-        const docType  = msg['document_type'] as string ?? 'bank_statement';
-        this.currentDocumentType = docType;
-        FiLog.i('Controller', `Document requested: type=${docType}`);
-        this.emitAndTrack({ kind: 'UploadDocument', prompt, documentType: docType });
+      case 'request_consent': {
+        const message = msg['message'] as string ??
+          'Allow ABC Bank to retrieve your bank statement for income verification?';
+        FiLog.i('Controller', 'Consent requested for bank statement');
+        this.emitAndTrack({ kind: 'ConsentRequest', message });
         break;
       }
 
@@ -335,7 +349,6 @@ export class FiSessionController {
   }
 
   private _startReview(): void {
-    if (this.reviewTimerId !== null) { clearTimeout(this.reviewTimerId); this.reviewTimerId = null; }
     const blob = this.reviewBlob;
     if (!blob) return;
 
@@ -347,71 +360,21 @@ export class FiSessionController {
       index:    this.reviewIndex,
       geo:      this.pendingPhotoGeo,
     });
-
-    this.reviewTimerId = window.setTimeout(() => {
-      FiLog.i('Controller', 'Review auto-save');
-      this._commitPhoto().catch(e => {
-        this.emitAndTrack({ kind: 'Error', message: `Photo upload failed: ${(e as Error).message}`, showRetry: true });
-      });
-    }, 5_000);
+    // No auto-save — user must click Save or Discard explicitly
   }
 
   // ── Document upload ───────────────────────────────────────────────────
 
-  /** Called by UI when the user selects a PDF file. */
-  async onDocumentSelected(file: File): Promise<void> {
-    const docType = this.currentDocumentType || 'bank_statement';
-    FiLog.i('Controller', `Uploading document: ${file.name}  type=${docType}`);
-    this.emitAndTrack({ kind: 'UploadingDocument', documentType: docType });
-
-    // Capture GPS at time of document upload
-    const docGeo = await this.location.getLocation();
-
-    try {
-      const result = await this.repo.uploadDocument(this.caseId, file, docType);
-      const doc: DocumentCapture = {
-        documentType: docType,
-        filename:     result.filename,
-        uploadedAt:   new Date().toISOString(),
-      };
-      this.documents.push(doc);
-      FiLog.i('Controller', `Document uploaded: ${result.filename}`);
-      const geoStr = docGeo
-        ? `\n📍 Lat: ${docGeo.latitude.toFixed(5)},  Long: ${docGeo.longitude.toFixed(5)}`
-        : '';
-      this.emitAndTrack({ kind: 'ShowMessage', text: `Bank statement uploaded.\n${result.filename}${geoStr}` });
-      this.ws.sendJson({ type: 'document_ready', document_type: docType, filename: result.filename });
-    } catch (err) {
-      FiLog.e('Controller', 'Document upload failed', err);
-      this.emitAndTrack({
-        kind: 'UploadDocument',
-        prompt: `Upload failed: ${(err as Error).message}. Tap Upload to retry or Skip to continue.`,
-        documentType: docType,
-      });
-    }
-  }
+  // onDocumentSelected removed — bank statements are now retrieved server-side
+  // from the vault folder keyed by mobile number (no upload needed)
 
   // ── Answer confirmation (8-second auto-confirm countdown) ────────────
 
   private _startConfirm(text: string): void {
     this._clearConfirmTimer();
     this.pendingConfirmText = text;
-    const CONFIRM_MS = 8_000;
-    const TICK_MS    = 1_000;
-    let remaining = CONFIRM_MS / TICK_MS;
-
-    const geo = this.pendingAnswerGeo;
-    const tick = () => {
-      this.emitAndTrack({ kind: 'ConfirmAnswer', text, remaining, geo });
-      if (remaining <= 0) {
-        FiLog.i('Controller', 'Confirm auto-timeout → confirming');
-        this._doConfirm();
-        return;
-      }
-      remaining--;
-      this.confirmTimerId = window.setTimeout(tick, TICK_MS);
-    };
-    tick();
+    // Show confirm screen immediately — no auto-confirm, user must tap Save or Re-record
+    this.emitAndTrack({ kind: 'ConfirmAnswer', text, remaining: 0, geo: this.pendingAnswerGeo });
   }
 
   private _doConfirm(): void {
@@ -432,15 +395,21 @@ export class FiSessionController {
     if (this.confirmTimerId !== null) { clearTimeout(this.confirmTimerId); this.confirmTimerId = null; }
   }
 
-  /** Save button pressed during photo review (or retry after upload failure). */
+  /** Save / Agree button handler. */
   onSave(): void {
     switch (this.currentUiKind()) {
+      case 'ConsentRequest':
+        FiLog.i('Controller', 'Consent given by applicant');
+        this.emitAndTrack({ kind: 'ConsentProcessing' });
+        window.setTimeout(() => {
+          this.ws.sendJson({ type: 'consent_given', purpose: 'bank_statement' });
+        }, 1_500);
+        break;
       case 'ConfirmAnswer':
         this._doConfirm();
         break;
       case 'ReviewPhoto':
       case 'Error':
-        if (this.reviewTimerId !== null) { clearTimeout(this.reviewTimerId); this.reviewTimerId = null; }
         this._commitPhoto().catch(e => {
           this.emitAndTrack({ kind: 'Error', message: `Photo upload failed: ${(e as Error).message}`, showRetry: true });
         });
@@ -448,15 +417,14 @@ export class FiSessionController {
     }
   }
 
-  /** Discard button pressed during photo review — retake the same photo. */
+  /** Discard / Skip / Retake button handler. */
   onDiscard(): void {
     switch (this.currentUiKind()) {
-      case 'UploadDocument':
-        FiLog.i('Controller', 'Document upload skipped by officer');
-        this.emitAndTrack({ kind: 'ShowMessage', text: 'Bank statement skipped.' });
-        this.ws.sendJson({ type: 'document_skipped', document_type: this.currentDocumentType });
+      case 'ConsentRequest':
+        FiLog.i('Controller', 'Consent declined');
+        this.emitAndTrack({ kind: 'ShowMessage', text: 'Income verification skipped.' });
+        this.ws.sendJson({ type: 'consent_declined' });
         break;
-
       case 'ConfirmAnswer':
         this._clearConfirmTimer();
         FiLog.i('Controller', 'User requested re-record');
@@ -464,7 +432,6 @@ export class FiSessionController {
         this.ws.sendJson({ type: 'answer_retry' });
         break;
       case 'ReviewPhoto':
-        if (this.reviewTimerId !== null) { clearTimeout(this.reviewTimerId); this.reviewTimerId = null; }
         this._retakePhoto();
         break;
       case 'Error':
@@ -580,7 +547,6 @@ export class FiSessionController {
     this._clearListenTimer();
     this._clearListenTick();
     this._clearConfirmTimer();
-    if (this.reviewTimerId !== null) { clearTimeout(this.reviewTimerId); this.reviewTimerId = null; }
     this.sarvam.close();
     this.recorder.destroy();
     this.player.stop();

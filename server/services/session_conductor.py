@@ -322,10 +322,15 @@ async def conduct_fi_session(ws: WebSocket, session_id: str) -> None:
         await _send(ws, {"type": "error", "message": "Handshake failed"})
         return
 
-    device_id  = ready_msg.get("device_id", "unknown")
-    basic_info = ready_msg.get("basic_info", {})
-    logger.info("[Conductor] Handshake OK — device=%s  applicant=%s %s",
-                device_id, basic_info.get("first_name", "?"), basic_info.get("last_name", ""))
+    device_id   = ready_msg.get("device_id", "unknown")
+    basic_info  = ready_msg.get("basic_info", {})
+    device_info = ready_msg.get("device_info", {})
+    logger.info(
+        "[Conductor] Handshake OK — device=%s  applicant=%s %s  client=%s %s",
+        device_id,
+        basic_info.get("first_name", "?"), basic_info.get("last_name", ""),
+        device_info.get("device_type", "?"), device_info.get("os", ""),
+    )
 
     try:
         from services.aws_service import get_polly

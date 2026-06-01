@@ -143,7 +143,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#F0F4FF;color:#1a1a2
 
 _SCRIPT_COMMON = """
 <script>
-function logout(){document.cookie='auditor_token=;max-age=0;path=/';location.href='/auditor/'}
+function logout(){document.cookie='auditor_token=;max-age=0;path=/';location.href='/fi/auditor/'}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
   .replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function fmtDate(iso){
@@ -225,7 +225,7 @@ _LOGIN_HTML = f"""<!DOCTYPE html>
     const btn = document.getElementById('btnLogin');
     btn.disabled = true; btn.textContent = 'Logging in…';
     try{{
-      const r = await fetch('/auditor/api/login',{{
+      const r = await fetch('/fi/auditor/api/login',{{
         method:'POST',
         headers:{{'Content-Type':'application/json'}},
         body:JSON.stringify({{username:u, password:p}}),
@@ -234,7 +234,7 @@ _LOGIN_HTML = f"""<!DOCTYPE html>
       if(r.ok && data.token){{
         document.cookie = `auditor_token=${{data.token}};path=/;max-age=86400`;
         localStorage.setItem('auditor_username', u);
-        location.href = '/auditor/cases';
+        location.href = '/fi/auditor/cases';
       }} else {{
         showErr(data.detail || 'Invalid credentials');
       }}
@@ -247,6 +247,11 @@ _LOGIN_HTML = f"""<!DOCTYPE html>
     el.textContent=msg; el.classList.remove('hidden');
   }}
   </script>
+<div id='lightbox' class='lightbox' onclick='closeLightbox()'>
+  <div class='lightbox-close' onclick='closeLightbox()'>&#x2715;</div>
+  <img id='lightboxImg' src='' alt=''/>
+  <div class='lightbox-caption' id='lightboxCaption'></div>
+</div>
 </body>
 </html>"""
 
@@ -294,7 +299,7 @@ _CASE_LIST_HTML = f"""<!DOCTYPE html>
     document.getElementById('tableWrap').innerHTML =
       '<div class="empty-state"><div class="spinner"></div><p>Loading…</p></div>';
     try{{
-      const cases = await fetch('/auditor/api/cases',{{
+      const cases = await fetch('/fi/auditor/api/cases',{{
         headers:{{'x-auditor-token': getCookie('auditor_token')}}
       }}).then(r=>{{if(!r.ok)throw new Error(r.status);return r.json()}});
 
@@ -312,7 +317,7 @@ _CASE_LIST_HTML = f"""<!DOCTYPE html>
     }} catch(e){{
       document.getElementById('tableWrap').innerHTML =
         `<div class="empty-state"><p style="color:#C62828">Error: ${{esc(e.message)}}</p></div>`;
-      if(String(e.message).includes('401')) location.href='/auditor/';
+      if(String(e.message).includes('401')) location.href='/fi/auditor/';
     }}
   }}
 
@@ -327,7 +332,7 @@ _CASE_LIST_HTML = f"""<!DOCTYPE html>
         <td style="color:#888;font-size:13px">${{idx+1}}</td>
         <td>${{fmtDateOnly(c.started_at)}}</td>
         <td>
-          <a class="case-link" href="/auditor/cases/${{esc(c.case_id)}}" target="_blank">
+          <a class="case-link" href="/fi/auditor/cases/${{esc(c.case_id)}}" target="_blank">
             ${{esc(c.case_id)}}
           </a>
         </td>
@@ -426,6 +431,11 @@ body{padding-bottom:90px}
 .inc-notice{background:#F3E5F5;border:1.5px solid #6A1B9A;border-radius:8px;padding:10px 16px;color:#4A148C;font-weight:600;font-size:13px;margin:8px 0}
 .score-big{font-size:56px;font-weight:900;color:#0D47A1;text-align:center;line-height:1}
 .pdf-frame{width:100%;height:800px;border:none;border-radius:8px}
+    .lightbox{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.92);align-items:center;justify-content:center;cursor:zoom-out;flex-direction:column;gap:12px}
+    .lightbox.open{display:flex}
+    .lightbox img{max-width:95vw;max-height:88vh;object-fit:contain;border-radius:6px;box-shadow:0 4px 40px rgba(0,0,0,.6)}
+    .lightbox-caption{color:rgba(255,255,255,.8);font-size:13px;text-align:center;max-width:80vw}
+    .lightbox-close{position:fixed;top:16px;right:20px;color:#fff;font-size:28px;cursor:pointer;background:rgba(0,0,0,.5);border-radius:50%;width:40px;height:40px;display:flex;align-items:center;justify-content:center;line-height:1}
 .decision-bar{position:fixed;bottom:0;left:0;right:0;background:#fff;
   border-top:2px solid #e8ecf4;padding:12px 24px;
   display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;
@@ -445,6 +455,8 @@ body{padding-bottom:90px}
   <a class="jump-link" href="#s-pan">PAN Verification</a>
   <a class="jump-link" href="#s-income">Income Analysis</a>
   <a class="jump-link" href="#s-location">Location</a>
+  <a class="jump-link" href="#s-income">Income</a>
+  <a class="jump-link" href="#s-cibil">CIBIL Score</a>
   <a class="jump-link" href="#s-credit">AI Credit</a>
   <a class="jump-link" href="#s-report">Report PDF</a>
   <a class="jump-link" href="#s-recording">Recording</a>
@@ -457,7 +469,7 @@ body{padding-bottom:90px}
   <div id="allSecs" style="display:none">
     <div id="s-overview"></div><div id="s-interview"></div>
     <div id="s-photos"></div><div id="s-pan"></div>
-    <div id="s-income"></div><div id="s-location"></div>
+    <div id="s-income"></div><div id="s-cibil"></div><div id="s-location"></div>
     <div id="s-credit"></div><div id="s-report"></div><div id="s-recording"></div>
   </div>
 </div>
@@ -486,8 +498,8 @@ function card(id,title,body){return`<div class="sec-card" id="${id}"><div class=
 
 async function load(){
   try{
-    const r=await fetch(`/auditor/api/cases/${CASE_ID}`,{headers:{'x-auditor-token':gc('auditor_token')}});
-    if(r.status===401){location.href='/auditor/';return}
+    const r=await fetch(`/fi/auditor/api/cases/${CASE_ID}`,{headers:{'x-auditor-token':gc('auditor_token')}});
+    if(r.status===401){location.href='/fi/auditor/';return}
     if(!r.ok) throw new Error('HTTP '+r.status);
     D=await r.json();renderAll();
   }catch(e){document.getElementById('loadMsg').innerHTML=`<p style="color:#C62828">Error: ${esc(e.message)}</p>`;}
@@ -517,8 +529,9 @@ function renderAll(){
   document.getElementById('s-overview').innerHTML=bldOverview(D,bi,qs,photos,meta);
   document.getElementById('s-interview').innerHTML=bldInterview(qs);
   document.getElementById('s-photos').innerHTML=bldPhotos(photos,D.case_id);
-  document.getElementById('s-pan').innerHTML=bldPan(panV);
+  document.getElementById('s-pan').innerHTML=bldPan(panV,D.case_id);
   document.getElementById('s-income').innerHTML=bldIncome(incA);
+  document.getElementById('s-cibil').innerHTML=bldCibil(sd.cibil_score||D.cibil_score);
   document.getElementById('s-location').innerHTML=bldLocation(geoR);
   document.getElementById('s-credit').innerHTML=bldCredit(credA);
   document.getElementById('s-report').innerHTML=bldReport(D.report_url);
@@ -547,10 +560,19 @@ function bldOverview(d,bi,qs,photos,meta){
       <div>
         <div style="font-weight:700;color:#0D47A1;font-size:12px;margin-bottom:8px">SESSION</div>
         ${kv('Case ID',d.case_id,false)}
-        ${kv('Device',meta.device_id||'—',false)}
+        ${kv('Device ID',meta.device_id||'—',false)}
         ${kv('Started',fmtDate(meta.started_at),false)}
         ${kv('Ended',fmtDate(meta.ended_at),false)}
         ${kv('Recording',meta.recording_filename||'Not available',false)}
+        ${(()=>{const di=(d.session_data&&d.session_data.session&&d.session_data.session.device_info)||{};
+          return di.browser?`
+        <div style="font-weight:700;color:#0D47A1;font-size:12px;margin:10px 0 6px">DEVICE</div>
+        ${kv('Browser',di.browser||'—',false)}
+        ${kv('OS / Platform',di.os||'—',false)}
+        ${kv('Device Type',di.device_type||'—',false)}
+        ${kv('Screen Size',di.screen_size||'—',false)}
+        ${kv('Language',di.language||'—',false)}`:'';
+        })()}
         <div style="font-weight:700;color:#0D47A1;font-size:12px;margin:12px 0 8px">COMPLETENESS</div>
         ${kv('Q&A',ua===0?`All ${qs.length} answered`:`${ua} unanswered`,ua>0)}
         ${kv('Selfie',selfie?'Captured':'INCOMPLETE',!selfie)}
@@ -582,7 +604,7 @@ function bldPhotos(photos,cid){
     const blur=p.blur_score?`Blur: ${Math.round(p.blur_score)}`:'';
     const geo=p.geo?.latitude?`GPS: ${p.geo.latitude.toFixed(5)}N ${p.geo.longitude.toFixed(5)}E`:'<span style="color:#9C27B0;font-size:11px">GPS missing</span>';
     return`<div class="card">
-      <img src="/storage/${cid}/${esc(p.filename)}" onerror="this.style.display='none'" alt="${esc(p.prompt)}" style="width:100%;height:180px;object-fit:cover;border-radius:8px 8px 0 0">
+      <img src="/fi/storage/${cid}/${esc(p.filename)}" onerror="this.style.display='none'" alt="${esc(p.prompt)}" onclick="openLightbox('/fi/storage/${cid}/${esc(p.filename)}','${esc(p.tag||p.prompt)}')" style="width:100%;height:180px;object-fit:cover;border-radius:8px 8px 0 0;cursor:zoom-in">
       <div style="padding:10px 12px">
         <div class="photo-tag">${esc(p.tag||'photo')}</div>
         ${blur?`<span style="font-size:11px;color:#888;margin-left:6px">${blur}</span>`:''}
@@ -595,12 +617,30 @@ function bldPhotos(photos,cid){
   return card('s-photos','Home Evidence',`<div class="photo-grid">${cards}</div>`);
 }
 
-function bldPan(pv){
+function bldPan(pv,cid){
   if(!pv) return card('s-pan','PAN Card Verification',inc('PAN card not captured'));
   const o=pv.ocr||{},nm=pv.name_match||{},tw=pv.three_way_match||{},n=pv.nsdl||{},fm=pv.face_match||{};
   const fmHtml=fm.error?inc('Face match: '+fm.error):
     (fm.similarity_score!=null?kv('Face Match',`${(fm.similarity_score||0).toFixed(1)}% - ${fm.comparison_status}`,!fm.matched):'');
-  return card('s-pan','PAN Card Verification',`
+  // PAN card photo
+  const panImgHtml=pv.filename?`
+    <div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:14px">
+      <div>
+        <div style="font-weight:700;color:#0D47A1;font-size:12px;margin-bottom:6px">PAN Card Photo</div>
+        <img src="/fi/storage/${cid}/${esc(pv.filename)}"
+             onerror="this.style.display='none'"
+             onclick="openLightbox('/fi/storage/${cid}/${esc(pv.filename)}','PAN Card')"
+             style="width:260px;height:160px;object-fit:contain;border:1px solid #DDE4F0;border-radius:8px;background:#F8F9FC;cursor:zoom-in">
+      </div>
+      ${pv.selfie_filename?`<div>
+        <div style="font-weight:700;color:#0D47A1;font-size:12px;margin-bottom:6px">Applicant Selfie</div>
+        <img src="/fi/storage/${cid}/${esc(pv.selfie_filename)}"
+             onerror="this.style.display='none'"
+             onclick="openLightbox('/fi/storage/${cid}/${esc(pv.selfie_filename)}','Applicant Selfie')"
+             style="width:140px;height:160px;object-fit:cover;border:1px solid #DDE4F0;border-radius:8px;background:#F8F9FC;cursor:zoom-in">
+      </div>`:''}
+    </div>`:'';
+  return card('s-pan','PAN Card Verification',panImgHtml+`
     <div class="two-col">
       <div>
         <div style="font-weight:700;color:#0D47A1;font-size:12px;margin-bottom:8px">OCR (AWS Textract)</div>
@@ -661,6 +701,35 @@ function bldIncome(ia){
     </div>`:''}`);
 }
 
+function bldCibil(c){
+  if(!c||!c.score) return card('s-cibil','CIBIL Credit Score',inc('CIBIL score not available'));
+  const score=c.score||0;
+  const grade=c.grade||'';
+  const label=c.label||'';
+  const color=c.color||'#555';
+  const threshold=c.cibil_threshold||800;
+  const eligible=c.loan_eligible;
+  const recText=c.recommendation||'';
+  const eligibleBadge=eligible
+    ?'<span style="background:#E8F5E9;color:#1B5E20;border:1px solid #A5D6A7;border-radius:10px;padding:3px 12px;font-size:12px;font-weight:700">Loan Eligible</span>'
+    :'<span style="background:#FFEBEE;color:#C62828;border:1px solid #EF9A9A;border-radius:10px;padding:3px 12px;font-size:12px;font-weight:700">Not Eligible</span>';
+  return card('s-cibil','CIBIL Credit Score (TransUnion CIBIL)',`
+    <div style="text-align:center;padding:20px 0;border-bottom:1px solid #eef0f5;margin-bottom:16px">
+      <div style="font-size:52px;font-weight:900;color:${color};line-height:1">${score}</div>
+      <div style="font-size:13px;color:#888;margin:4px 0">Credit Score / 900</div>
+      <div style="font-size:18px;font-weight:700;color:${color};margin:6px 0">${esc(label)}  —  ${esc(grade)}</div>
+      <div style="margin:10px 0">${eligibleBadge}</div>
+      <div style="font-size:13px;color:#555;margin-top:6px">${esc(recText)}</div>
+      <div style="font-size:12px;color:#888;margin-top:4px">Threshold: ${threshold}+ considered Good</div>
+    </div>
+    ${kv('CIBIL Score',String(score),false)}
+    ${kv('Grade',grade+' — '+label,false)}
+    ${kv('Eligible',eligible?'YES':'NO',!eligible)}
+    ${kv('Threshold',String(threshold),false)}
+    ${kv('PAN Number',c.pan_number||'—',false)}
+    ${kv('Bureau',c.bureau||'TransUnion CIBIL',false)}
+    ${kv('Report Date',c.report_date||'—',false)}`);
+}
 function bldLocation(g){
   if(!g||!g.points_checked) return card('s-location','Location Report',inc('No GPS data captured'));
   const ok=g.status==='PASS'||g.verified;
@@ -755,7 +824,7 @@ function bldRecording(d,meta){
     (d.session_data&&d.session_data.session&&d.session_data.session.recording) ||
     (d.files||[]).find(f=>f.endsWith('.webm')||f.endsWith('.mp4')||f.endsWith('.ogg')) || '';
   if(!recName) return card('s-recording','Session Recording',inc('No recording found for this session'));
-  const recUrl = `/storage/${d.case_id}/${recName}`;
+  const recUrl = `/fi/storage/${d.case_id}/${recName}`;
   return card('s-recording','Session Recording',`
     <div style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
       <span style="font-size:13px;color:#555">${esc(recName)}</span>
@@ -784,7 +853,7 @@ async function decide(decision){
   const notes=document.getElementById('decNotes').value.trim();
   const auditor=localStorage.getItem('auditor_username')||'auditor';
   try{
-    const r=await fetch(`/auditor/api/cases/${CASE_ID}/decision`,{
+    const r=await fetch(`/fi/auditor/api/cases/${CASE_ID}/decision`,{
       method:'POST',
       headers:{'Content-Type':'application/json','x-auditor-token':gc('auditor_token')},
       body:JSON.stringify({decision,notes,auditor_name:auditor}),
@@ -799,6 +868,9 @@ async function decide(decision){
 }
 
 load();
+function openLightbox(url,caption){document.getElementById('lightboxImg').src=url;document.getElementById('lightboxCaption').textContent=caption||'';document.getElementById('lightbox').classList.add('open');}
+function closeLightbox(){document.getElementById('lightbox').classList.remove('open');document.getElementById('lightboxImg').src='';}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeLightbox();});
 </script>
 </body>
 </html>"""
@@ -850,7 +922,7 @@ def _case_summary(folder: Path) -> Dict[str, Any]:
         "mobile_number":  bi.get("mobile_number") or "",
         "is_complete":    is_complete,
         "has_report":     has_report,
-        "report_url":     f"/storage/{case_id}/{report_file}" if report_file else None,
+        "report_url":     f"/fi/storage/{case_id}/{report_file}" if report_file else None,
         "decision":       decision_d.get("decision"),
         "decision_notes": decision_d.get("notes"),
         "decided_by":     decision_d.get("decided_by"),
@@ -874,7 +946,7 @@ def _extract_name_from_qa(questions: List[Dict]) -> str:
 async def auditor_root(request: Request) -> str:
     if _check_token(request):
         from fastapi.responses import RedirectResponse
-        return RedirectResponse(url="/auditor/cases")
+        return RedirectResponse(url="/fi/auditor/cases")
     return _LOGIN_HTML
 
 
@@ -882,7 +954,7 @@ async def auditor_root(request: Request) -> str:
 async def auditor_cases_page(request: Request) -> str:
     if not _check_token(request):
         from fastapi.responses import RedirectResponse
-        return RedirectResponse(url="/auditor/")
+        return RedirectResponse(url="/fi/auditor/")
     return _CASE_LIST_HTML
 
 
@@ -890,7 +962,7 @@ async def auditor_cases_page(request: Request) -> str:
 async def auditor_case_detail_page(case_id: str, request: Request) -> str:
     if not _check_token(request):
         from fastapi.responses import RedirectResponse
-        return RedirectResponse(url="/auditor/")
+        return RedirectResponse(url="/fi/auditor/")
     return _case_detail_html(case_id)
 
 
@@ -936,6 +1008,7 @@ async def api_case_detail(case_id: str, request: Request) -> Dict[str, Any]:
     responses: Dict[str, str] = {}
     geo_result      = None
     credit_analysis = None
+    cibil_score     = None
     resp_dir = folder / "responses"
     if resp_dir.exists():
         for rf in resp_dir.iterdir():
@@ -947,6 +1020,8 @@ async def api_case_detail(case_id: str, request: Request) -> Dict[str, Any]:
                         geo_result = json.loads(content)
                     elif rf.name == "credit_analysis.json":
                         credit_analysis = json.loads(content)
+                    elif rf.name == "cibil_score.json":
+                        cibil_score = json.loads(content)
                 except Exception:
                     pass
 
@@ -965,9 +1040,19 @@ async def api_case_detail(case_id: str, request: Request) -> Dict[str, Any]:
     if session_data:
         session_data["photos"] = photos
 
-    # credit_analysis: prefer session_data (future sessions), fall back to parsed JSON
+    # credit_analysis and cibil_score: prefer session_data, fall back to parsed JSON
     if not session_data.get("credit_analysis") and credit_analysis:
         session_data["credit_analysis"] = credit_analysis
+    if not session_data.get("cibil_score") and cibil_score:
+        session_data["cibil_score"] = cibil_score
+
+    # Inject selfie filename into pan_verification so the auditor can show both photos
+    pan_v = session_data.get("pan_verification") or {}
+    if pan_v and not pan_v.get("selfie_filename"):
+        selfie = next((p for p in photos if p.get("is_selfie")), None)
+        if selfie:
+            pan_v["selfie_filename"] = selfie.get("filename", "")
+            session_data["pan_verification"] = pan_v
 
     return {
         "case_id":          case_id,
@@ -979,7 +1064,7 @@ async def api_case_detail(case_id: str, request: Request) -> Dict[str, Any]:
                                           "credit_analysis.json", "geo_verification.json")},
         "geo_result":       geo_result,
         "credit_analysis":  credit_analysis,
-        "report_url":       f"/storage/{case_id}/{report_file}" if report_file else None,
+        "report_url":       f"/fi/storage/{case_id}/{report_file}" if report_file else None,
         "report_filename":  report_file,
         "decision":         decision_d.get("decision"),
         "decision_notes":   decision_d.get("notes"),

@@ -9,6 +9,15 @@ class GeoPoint(BaseModel):
     timestamp: str
 
 
+class DeviceInfo(BaseModel):
+    user_agent:  str = ""
+    browser:     str = ""
+    os:          str = ""
+    device_type: str = ""
+    screen_size: str = ""
+    language:    str = ""
+
+
 class BasicInfo(BaseModel):
     first_name:    str   = ""
     last_name:     str   = ""
@@ -45,10 +54,11 @@ class DocumentMeta(BaseModel):
 
 class SessionMetadata(BaseModel):
     session_id:         str
-    device_id:          Optional[str]    = None
+    device_id:          Optional[str]        = None
     started_at:         str
     ended_at:           str
-    basic_info:         Optional[BasicInfo] = None
+    basic_info:         Optional[BasicInfo]  = None
+    device_info:        Optional[DeviceInfo] = None
     questions:          List[QuestionAnswer] = []
     photos:             List[PhotoMeta]      = []
     documents:          List[DocumentMeta]   = []

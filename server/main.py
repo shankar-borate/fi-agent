@@ -24,7 +24,6 @@ def _setup_logging() -> None:
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(logging.INFO)
-    # Quieten noisy libraries
     for noisy in ("botocore", "boto3", "urllib3", "websockets"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
@@ -37,11 +36,13 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="FI Agent Server",
-    description=(
-        "Server-driven FI session: AWS Polly TTS → Android playback, "
-        "Android PCM audio → AWS Transcribe (en-IN) STT, photo collection."
-    ),
+    description="ABC Bank Field Investigation platform",
     version="2.0.0",
+    # All public routes live under /fi/ so nginx can identify FI traffic
+    # by a single prefix and forward with one location block.
+    docs_url="/fi/docs",
+    redoc_url="/fi/redoc",
+    openapi_url="/fi/openapi.json",
 )
 
 app.add_middleware(
@@ -51,18 +52,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(dashboard_router)                        # Web dashboard + case APIs  (no prefix)
-app.include_router(auditor_router)                          # Bank Auditor portal → /auditor/...
-app.include_router(fi_session_router, prefix="/fi")         # REST  → /fi/api/fi-session/...
-app.include_router(ws_session_router, prefix="/fi")         # WS    → /fi/ws/fi-session/...
+# ── Route registration ────────────────────────────────────────────────────────
+#
+#  Every public-facing route lives under /fi/ so nginx needs only ONE
+#  location block:  location /fi/ { proxy_pass http://127.0.0.1:8000; }
+#
+#  /fi/api/fi-session/...  — FI session REST endpoints
+#  /fi/ws/fi-session/...   — WebSocket (FI session conductor)
+#  /fi/auditor/...         — Bank employee auditor portal
+#  /fi/admin/...           — Internal case dashboard
+#  /fi/storage/...         — Case files (photos, PDFs, recordings)
+#  /fi/health              — Health check
+#  /fi/                    — Customer web app (served last via StaticFiles)
+
+app.include_router(fi_session_router, prefix="/fi")          # /fi/api/fi-session/...
+app.include_router(ws_session_router, prefix="/fi")          # /fi/ws/fi-session/...
+app.include_router(auditor_router,    prefix="/fi")          # /fi/auditor/...
+app.include_router(dashboard_router,  prefix="/fi/admin")    # /fi/admin/ + /fi/admin/api/cases
+
+
+@app.get("/fi/health", tags=["meta"])
+async def health() -> dict:
+    return {
+        "status":          "ok",
+        "storage_root":    settings.storage_root,
+        "aws_region":      settings.aws_region,
+        "polly_voice":     settings.polly_voice_id,
+        "transcribe_lang": settings.transcribe_language_code,
+    }
 
 
 @app.on_event("startup")
 async def startup() -> None:
     storage = get_storage_root()
-    app.mount("/storage", StaticFiles(directory=str(storage), check_dir=False), name="storage")
+    # Case files served under /fi/storage/
+    app.mount("/fi/storage", StaticFiles(directory=str(storage), check_dir=False),
+              name="storage")
 
-    # Serve built web app — mount last so API routes take priority
+    # Customer web app — mounted LAST so API routes always take priority
     web_dist = Path(__file__).parent.parent / "web" / "dist"
     if web_dist.exists():
         app.mount("/fi", StaticFiles(directory=str(web_dist), html=True), name="web")
@@ -72,22 +99,7 @@ async def startup() -> None:
 
     logger.info("Storage root  : %s", storage)
     logger.info("Listening on  : %s:%s", settings.host, settings.port)
-    logger.info("AWS region    : %s", settings.aws_region)
-    logger.info("Polly voice   : %s", settings.polly_voice_id)
-    logger.info("Transcribe    : %s", settings.transcribe_language_code)
-    logger.info("Questions     : %d configured", len(settings.fi_questions))
-    logger.info("Photo prompts : %d configured", len(settings.fi_photo_prompts))
-
-
-@app.get("/health")
-async def health() -> dict:
-    return {
-        "status": "ok",
-        "storage_root": settings.storage_root,
-        "aws_region": settings.aws_region,
-        "polly_voice": settings.polly_voice_id,
-        "transcribe_lang": settings.transcribe_language_code,
-    }
+    logger.info("All routes under /fi/ — nginx: location /fi/ { proxy_pass http://127.0.0.1:8000; }")
 
 
 if __name__ == "__main__":

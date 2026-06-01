@@ -85,7 +85,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 // ── Case list ──────────────────────────────────────────────────────────────
 async function loadCases() {
   document.getElementById('caseCount').textContent = 'Loading…';
-  const cases = await apiFetch('/api/cases');
+  const cases = await apiFetch('/fi/admin/api/cases');
   if (!cases) return;
   document.getElementById('caseCount').textContent =
     `${cases.length} case${cases.length !== 1 ? 's' : ''}`;
@@ -111,7 +111,7 @@ async function loadCase(caseId) {
   if (card) card.classList.add('active');
   document.getElementById('mainPanel').innerHTML =
     '<div class="empty-panel"><div class="spinner-border text-primary"></div></div>';
-  const data = await apiFetch(`/api/cases/${caseId}`);
+  const data = await apiFetch(`/fi/admin/api/cases/${caseId}`);
   if (!data) return;
   renderCase(data);
 }
@@ -138,7 +138,7 @@ function renderCase(d) {
     return `
       <div class="col-md-6 col-lg-4">
         <div class="card shadow-sm h-100">
-          <img src="/storage/${d.case_id}/${p.filename}" class="photo-thumb"
+          <img src="/fi/storage/${d.case_id}/${p.filename}" class="photo-thumb"
                onerror="this.src=''" alt="${esc(p.prompt)}">
           <div class="card-body p-2">
             <p class="small fw-semibold text-truncate mb-1" title="${esc(p.prompt)}">${esc(p.prompt)}</p>
@@ -157,7 +157,7 @@ function renderCase(d) {
   const fileLinks = (d.files || []).map(f => `
     <li class="list-group-item d-flex justify-content-between align-items-center py-1">
       <span class="small font-monospace">${esc(f)}</span>
-      <a href="/storage/${d.case_id}/${f}" target="_blank"
+      <a href="/fi/storage/${d.case_id}/${f}" target="_blank"
          class="btn btn-outline-secondary btn-sm py-0 px-2">⬇</a>
     </li>`).join('');
 
@@ -342,7 +342,7 @@ async def get_case(case_id: str) -> Dict[str, Any]:
                     logger.warning("[Dashboard] Cannot read response file %s: %s", rf.name, exc)
 
     report_filename = next((f for f in files if f.endswith(".pdf")), None)
-    report_url = f"/storage/{case_id}/{report_filename}" if report_filename else None
+    report_url = f"/fi/storage/{case_id}/{report_filename}" if report_filename else None
 
     return {
         "case_id":          case_id,

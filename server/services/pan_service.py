@@ -224,7 +224,7 @@ def _rekognition_client():
 def face_match_sync(selfie_path: Path, pan_path: Path) -> Dict[str, Any]:
     """
     Compare a selfie image against the face on the PAN card using AWS Rekognition.
-    Returns similarity score and match determination (threshold: 80%).
+    Returns similarity score and match determination (threshold: 30%).
     """
     logger.info("[FaceMatch] Comparing selfie=%s  PAN=%s", selfie_path.name, pan_path.name)
 
@@ -241,7 +241,8 @@ def face_match_sync(selfie_path: Path, pan_path: Path) -> Dict[str, Any]:
         )
         matches    = resp.get("FaceMatches", [])
         similarity = max((m["Similarity"] for m in matches), default=0.0)
-        matched    = similarity >= 80.0
+        threshold  = settings.fi_face_match_threshold
+        matched    = similarity >= threshold
 
         logger.info("[FaceMatch] Similarity=%.1f%%  matched=%s", similarity, matched)
         return {
