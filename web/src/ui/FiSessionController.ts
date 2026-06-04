@@ -71,6 +71,10 @@ export class FiSessionController {
   private pendingPhotoGeo: GeoPoint | null = null;
   private lastPrompt       = '';
 
+  // Background GPS promise — fired at countdown start, resolved by Save time
+  private _geoForPhoto: Promise<GeoPoint | null> = Promise.resolve(null);
+  private _geoStarted  = false;
+
   // Timers
   private listenTimerId:   number | null = null;
 
@@ -238,7 +242,10 @@ export class FiSessionController {
 
         if (isFinal) {
           this._clearListenTimer();
-          this._startConfirm(text);
+          // Show the complete final transcript for 800 ms so the user can
+          // read the full text before the Save / Discard screen appears.
+          this.emitAndTrack({ kind: 'ShowTranscript', text, isFinal: true });
+          window.setTimeout(() => this._startConfirm(text), 800);
         } else {
           this.emitAndTrack({ kind: 'ShowTranscript', text, isFinal: false });
         }
@@ -276,6 +283,13 @@ export class FiSessionController {
 
       case 'countdown': {
         const value = msg['value'] as number;
+        // On the first countdown tick fire GPS immediately — it has the full
+        // countdown duration (typically 5 s) to resolve before capture_photo.
+        if (this.pendingPhotoGeo === null && !this._geoStarted) {
+          this._geoStarted  = true;
+          this._geoForPhoto = this.location.getLocation();
+          FiLog.i('Controller', `Countdown ${value}s — GPS started`);
+        }
         this.emitAndTrack({ kind: 'Countdown', remaining: value, prompt: this.lastPrompt });
         break;
       }
@@ -286,7 +300,15 @@ export class FiSessionController {
         const photoIndex = msg['photo_index'] as number  ?? 0;
         FiLog.i('Controller', `Capture photo selfie=${isSelfie} idx=${photoIndex}`);
 
-        this.pendingPhotoGeo  = await this.location.getLocation();
+        // GPS was already fired during the countdown; reset the flag for the
+        // next photo cycle. If countdown was skipped, start GPS here as fallback.
+        if (!this._geoStarted) {
+          this._geoForPhoto = this.location.getLocation();
+          FiLog.i('Controller', 'GPS started at capture_photo (no prior countdown)');
+        }
+        this._geoStarted     = false;   // reset for next photo
+        this.pendingPhotoGeo = null;
+
         this.reviewPrompt     = prompt;
         this.reviewIsSelfie   = isSelfie;
         this.reviewIndex      = photoIndex;
@@ -294,6 +316,9 @@ export class FiSessionController {
 
         await this.camera.switchCamera(isSelfie ? 'user' : 'environment');
         this.emitAndTrack({ kind: 'CaptureNow', isSelfie, index: photoIndex, prompt });
+
+        // Give the user 600 ms to see the camera frame and position before capture.
+        await new Promise(resolve => window.setTimeout(resolve, 600));
 
         try {
           const blob = await this.onCapture();
@@ -467,6 +492,24 @@ export class FiSessionController {
     const blob = this.reviewBlob;
     if (!blob) return;
 
+    // Collect GPS — called from Save button click (a user gesture on iOS).
+    // 1. Wait up to 5 s for the background promise started at capture time.
+    // 2. If still null (iOS denied in non-gesture context), try fresh here —
+    //    this call IS inside a user gesture, so iOS will accept it.
+    if (!this.pendingPhotoGeo) {
+      this.pendingPhotoGeo = await Promise.race([
+        this._geoForPhoto,
+        new Promise<null>(r => window.setTimeout(() => r(null), 5_000)),
+      ]);
+    }
+    if (!this.pendingPhotoGeo) {
+      FiLog.i('Controller', 'GPS retry inside Save gesture (iOS fallback)');
+      this.pendingPhotoGeo = await this.location.getLocation();
+    }
+    FiLog.i('Controller', `Photo GPS: ${this.pendingPhotoGeo
+      ? `${this.pendingPhotoGeo.latitude.toFixed(5)}, ${this.pendingPhotoGeo.longitude.toFixed(5)}`
+      : 'unavailable'}`);
+
     const ts       = _timestamp();
     const ext      = blob.type.includes('png') ? '.png' : '.jpg';
     const filename = `photo_${ts}${ext}`;
@@ -499,8 +542,14 @@ export class FiSessionController {
     FiLog.i('Controller', `Submit: case=${this.caseId}`);
     this.emitAndTrack({ kind: 'Uploading' });
     try {
-      // Stop session recording
-      const recBlob = await this.sessionRec.stop().catch(() => null);
+      // Stop session recording — only upload if server flag allows it
+      const recBlob = FiConfig.uploadRecording
+        ? await this.sessionRec.stop().catch(() => null)
+        : null;
+      if (!FiConfig.uploadRecording) {
+        this.sessionRec.stop().catch(() => undefined);  // stop cleanly without uploading
+        FiLog.i('Controller', 'Recording upload skipped (fi_upload_recording=false)');
+      }
       const recName = recBlob
         ? `recording_${this.caseId}_${_timestamp()}${this.sessionRec.extension}`
         : null;
@@ -511,6 +560,7 @@ export class FiSessionController {
         startedAt:     this.startedAt,
         endedAt:       new Date().toISOString(),
         basicInfo:     this.basicInfo,
+        propertyInfo:  this.propertyInfo,
         answers:       this.answers,
         photos:        this.photos,
         documents:     this.documents,

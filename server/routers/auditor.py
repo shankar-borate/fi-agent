@@ -330,7 +330,7 @@ _CASE_LIST_HTML = f"""<!DOCTYPE html>
         : '<span class="badge badge-pending">Pending</span>';
       return `<tr>
         <td style="color:#888;font-size:13px">${{idx+1}}</td>
-        <td>${{fmtDateOnly(c.started_at)}}</td>
+        <td style="white-space:nowrap;font-size:13px">${{fmtDate(c.started_at)}}</td>
         <td>
           <a class="case-link" href="/fi/auditor/cases/${{esc(c.case_id)}}" target="_blank">
             ${{esc(c.case_id)}}
@@ -356,7 +356,7 @@ _CASE_LIST_HTML = f"""<!DOCTYPE html>
     document.getElementById('tableWrap').innerHTML = `
       <table class="data-table">
         <thead><tr>
-          <th>#</th><th>Date</th><th>Case ID</th>
+          <th>#</th><th>Date &amp; Time</th><th>Case ID</th>
           <th>Customer Name</th><th>PAN</th>
           <th>Status</th><th>Decision</th><th>Reviewed By</th><th>Report</th>
         </tr></thead>
@@ -544,7 +544,11 @@ function bldOverview(d,bi,qs,photos,meta){
   const ua=qs.filter(q=>!q.answer?.trim()).length;
   const selfie=photos.some(p=>p.is_selfie);
   const hasPan=!!(d.session_data?.pan_verification||d.responses?.['pan_verification.json']);
-  const hasInc=!!(d.session_data?.income_document?.documents?.length||d.responses?.['income_analysis.json']);
+  const _incA=d.session_data?.income_document?.analysis;
+  const hasInc=!!(_incA?.avg_monthly_income||_incA?.creditworthiness_score!=null||d.session_data?.income_document?.documents?.length);
+  const pi=d.session_data?.property_info||d.property_info||{};
+  const propTypeLabel={'flat':'Flat / Apartment','bungalow':'Bungalow / House'}[pi.property_type]||pi.property_type||'—';
+  const hallLabel=pi.hall===0||pi.hall==='0'?'No':'Yes';
   return card('s-overview','Applicant & Session Overview',`
     <div class="two-col">
       <div>
@@ -556,6 +560,11 @@ function bldOverview(d,bi,qs,photos,meta){
         ${kv('PAN',bi.pan_number||'—',!bi.pan_number)}
         ${kv('Mobile',bi.mobile_number?'+91 '+bi.mobile_number:'—',!bi.mobile_number)}
         ${kv('Income',bi.income_range||'—',false)}
+        ${pi.property_type?`
+        <div style="font-weight:700;color:#0D47A1;font-size:12px;margin:10px 0 6px">PROPERTY INFO</div>
+        ${kv('Type',propTypeLabel,false)}
+        ${kv('Bedrooms',pi.bedrooms||'—',false)}
+        ${kv('Hall / Living Room',hallLabel,false)}`:''}
       </div>
       <div>
         <div style="font-weight:700;color:#0D47A1;font-size:12px;margin-bottom:8px">SESSION</div>
@@ -577,7 +586,7 @@ function bldOverview(d,bi,qs,photos,meta){
         ${kv('Q&A',ua===0?`All ${qs.length} answered`:`${ua} unanswered`,ua>0)}
         ${kv('Selfie',selfie?'Captured':'INCOMPLETE',!selfie)}
         ${kv('PAN',hasPan?'Verified':'INCOMPLETE',!hasPan)}
-        ${kv('Income',hasInc?'Uploaded':'INCOMPLETE',!hasInc)}
+        ${kv('Income',hasInc?'Analysed':'INCOMPLETE',!hasInc)}
         ${kv('Report',d.report_url?'Generated':'INCOMPLETE',!d.report_url)}
       </div>
     </div>`);
@@ -589,7 +598,7 @@ function bldInterview(qs){
   const warn=ua?inc(`${ua} of ${qs.length} questions unanswered`):'';
   const rows=qs.map((q,i)=>{
     const ans=q.answer?.trim()||'<span class="inc">No answer</span>';
-    const geo=q.geo?.latitude?`${q.geo.latitude.toFixed(5)}N ${q.geo.longitude.toFixed(5)}E`:'<span class="inc">GPS missing</span>';
+    const geo=q.geo?.latitude?`${q.geo.latitude.toFixed(5)}N ${q.geo.longitude.toFixed(5)}E`:'<span style="color:#999;font-size:11px">—</span>';
     return`<tr><td style="width:28px;color:#888;text-align:center">${i+1}</td><td>${esc(q.question)}</td><td>${ans}</td><td style="font-size:12px;color:#666">${geo}</td></tr>`;
   }).join('');
   return card('s-interview','Field Interview',warn+`
@@ -602,7 +611,7 @@ function bldPhotos(photos,cid){
   if(!scene.length) return card('s-photos','Home Evidence',inc('No home photos captured'));
   const cards=scene.map(p=>{
     const blur=p.blur_score?`Blur: ${Math.round(p.blur_score)}`:'';
-    const geo=p.geo?.latitude?`GPS: ${p.geo.latitude.toFixed(5)}N ${p.geo.longitude.toFixed(5)}E`:'<span style="color:#9C27B0;font-size:11px">GPS missing</span>';
+    const geo=p.geo?.latitude?`GPS: ${p.geo.latitude.toFixed(5)}N ${p.geo.longitude.toFixed(5)}E`:'<span style="color:#999;font-size:11px">— GPS not captured</span>';
     return`<div class="card">
       <img src="/fi/storage/${cid}/${esc(p.filename)}" onerror="this.style.display='none'" alt="${esc(p.prompt)}" onclick="openLightbox('/fi/storage/${cid}/${esc(p.filename)}','${esc(p.tag||p.prompt)}')" style="width:100%;height:180px;object-fit:cover;border-radius:8px 8px 0 0;cursor:zoom-in">
       <div style="padding:10px 12px">
@@ -734,6 +743,29 @@ function bldLocation(g){
   if(!g||!g.points_checked) return card('s-location','Location Report',inc('No GPS data captured'));
   const ok=g.status==='PASS'||g.verified;
   const spread=g.max_pairwise_m||g.max_pairwise_distance_m||0;
+
+  // City match banner
+  const cm=g.city_match;
+  let cityHtml='';
+  if(cm){
+    const cok=cm.matched;
+    cityHtml=`<div style="background:${cok?'#E8F5E9':'#FFEBEE'};border:1.5px solid ${cok?'#2E7D32':'#C62828'};
+         border-radius:8px;padding:10px 16px;margin-bottom:10px;display:flex;align-items:flex-start;gap:12px">
+      <span style="font-size:20px;margin-top:1px">${cok?'✓':'✗'}</span>
+      <div>
+        <div style="font-weight:700;color:${cok?'#1B5E20':'#C62828'};font-size:13px">
+          City Match: ${cok?'PASS — city confirmed in GPS address':'FAIL — declared city not found in GPS address'}
+        </div>
+        <div style="font-size:12px;color:#555;margin-top:3px">
+          Declared city: <strong>${esc(cm.declared_city)}</strong>
+        </div>
+        <div style="font-size:12px;color:#555;margin-top:2px">
+          Google Maps: ${esc(cm.google_address)}
+        </div>
+      </div>
+    </div>`;
+  }
+
   const rows=(g.details||[]).map(p=>{
     const w=p.within_radius;
     return`<tr style="background:${w?'#E8F5E9':'#FFF3E0'}">
@@ -748,7 +780,7 @@ function bldLocation(g){
     `<div style="background:${ok?'#E8F5E9':'#FFF3E0'};border:1.5px solid ${ok?'#2E7D32':'#E65100'};border-radius:8px;padding:12px 16px;margin-bottom:12px;font-weight:700;color:${ok?'#1B5E20':'#E65100'}">
       ${ok?'LOCATION VERIFIED':'LOCATION FAILED'} — Max spread: ${Math.round(spread)} m (threshold 500 m)
     </div>`+
-    (g.address?kv('Address',g.address,false):'')+
+    cityHtml+
     kv('Centroid',`${(g.centroid_lat||0).toFixed(5)}N  ${(g.centroid_lon||0).toFixed(5)}E`,false)+
     kv('Points Checked',String(g.points_checked||0),false)+
     (rows?`<div style="overflow-x:auto;margin-top:12px"><table style="width:100%;border-collapse:collapse;font-size:13px">

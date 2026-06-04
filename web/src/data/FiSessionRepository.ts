@@ -46,6 +46,11 @@ export class FiSessionRepository {
         income_range:  session.basicInfo.incomeRange,
         loan_amount:   session.basicInfo.loanAmount,
       },
+      property_info: session.propertyInfo ? {
+        property_type: session.propertyInfo.propertyType,
+        bedrooms:      session.propertyInfo.bedrooms,
+        hall:          session.propertyInfo.hall,
+      } : null,
       questions:   session.answers.map(a => ({
         question: a.question,
         answer:   a.answer,

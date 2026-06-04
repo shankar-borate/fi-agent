@@ -318,8 +318,18 @@
       <p class="fi-info-note">⚠ Allow camera, microphone &amp; location when prompted. The whole process takes 5–10 minutes.</p>
     </div>
 
+    <label class="consent-checkbox-label">
+      <input type="checkbox" id="consentCheck" />
+      <span>
+        I consent to ABC Bank capturing my photographs, voice answers, GPS location, and
+        session recording for the purpose of this loan application verification. I understand
+        that this data will be used solely for credit assessment and stored securely as per
+        RBI data privacy guidelines.
+      </span>
+    </label>
+
     <p id="reviewError" class="error-msg hidden"></p>
-    <button id="btnStartFI" class="btn btn-primary btn-full">Start Field Investigation</button>
+    <button id="btnStartFI" class="btn btn-primary btn-full" disabled>Start Field Investigation</button>
   </div>
 </div>
 

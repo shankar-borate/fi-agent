@@ -250,7 +250,15 @@ async def _pan_photo_phase(ws: WebSocket, session_id: str, photo_index: int) -> 
     prompt  = settings.fi_pan_photo_prompt
 
     for attempt in range(1, settings.fi_pan_max_attempts + 1):
-        await _send(ws, {"type": "announce_photo", "prompt": prompt, "is_selfie": False})
+        # Synthesise with Polly so the same voice is used as for all other photos
+        audio_b64 = ""
+        try:
+            from services.aws_service import get_polly
+            audio_b64 = await get_polly().async_synthesize(prompt)
+        except Exception as exc:
+            logger.warning("[Conductor] PAN: Polly failed: %s — falling back to device TTS", exc)
+        await _send(ws, {"type": "announce_photo", "prompt": prompt,
+                         "is_selfie": False, "audio": audio_b64})
         await _wait_tts_done(ws)
 
         for i in range(settings.fi_countdown_seconds, 0, -1):

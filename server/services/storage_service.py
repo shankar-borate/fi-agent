@@ -53,15 +53,17 @@ def list_session_files(session_id: str) -> List[str]:
 
 
 async def save_session_data_json(
-    session_id:       str,
-    meta:             SessionMetadata,
-    geo_result:       Dict[str, Any],
-    address:          str,
-    pan_verification: Optional[Dict[str, Any]],
-    nameplate_ocr:    Optional[Dict[str, Any]],
-    income_analysis:  Optional[Dict[str, Any]],
-    credit_analysis:  Optional[Dict[str, Any]] = None,
-    cibil_score:      Optional[Dict[str, Any]] = None,
+    session_id:        str,
+    meta:              SessionMetadata,
+    geo_result:        Dict[str, Any],
+    address:           str,
+    pan_verification:  Optional[Dict[str, Any]],
+    nameplate_ocr:     Optional[Dict[str, Any]],
+    income_analysis:   Optional[Dict[str, Any]],
+    credit_analysis:   Optional[Dict[str, Any]] = None,
+    cibil_score:       Optional[Dict[str, Any]] = None,
+    analysed_entries:  Optional[List[Dict[str, Any]]] = None,
+    property_info:     Optional[Dict[str, Any]] = None,
 ) -> Path:
     """
     Write a comprehensive, denormalised session_data.json that is the single
@@ -75,6 +77,15 @@ async def save_session_data_json(
             return None
         return {"latitude": g.latitude, "longitude": g.longitude, "timestamp": g.timestamp}
 
+    # Build a filename → analysis lookup so AI analysis is always included,
+    # even when GPS is absent for a photo.
+    _analysis_map: Dict[str, str] = {}
+    if analysed_entries:
+        for ae in analysed_entries:
+            fn = ae.get("filename", "")
+            if fn and ae.get("analysis"):
+                _analysis_map[fn] = ae["analysis"]
+
     photos_data = []
     for ph in meta.photos:
         entry: Dict[str, Any] = {
@@ -85,6 +96,7 @@ async def save_session_data_json(
             "geo":        _geo(ph.geo),
             "blur_score": ph.blur_score,
             "ocr_text":   ph.ocr_text,
+            "analysis":   _analysis_map.get(ph.filename, ""),
         }
         # Attach face match if this is the selfie
         if ph.is_selfie and pan_verification and "face_match" in pan_verification:
@@ -156,10 +168,12 @@ async def save_session_data_json(
             "points_checked":      geo_result.get("points_checked"),
             "status":              "PASS" if geo_result.get("verified") else "FAIL",
             "details":             geo_result.get("details", []),
+            "city_match":          geo_result.get("city_match"),
         },
 
         "credit_analysis": credit_analysis or {},
         "cibil_score":     cibil_score     or {},
+        "property_info":   property_info   or {},
     }
 
     folder = _session_folder(session_id)

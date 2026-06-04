@@ -4,7 +4,7 @@ import { FiApiClient }         from './data/FiApiClient';
 import { FiSessionRepository } from './data/FiSessionRepository';
 import { FiSessionController } from './ui/FiSessionController';
 import { FiSessionUI }         from './ui/FiSessionUI';
-import { FiConfig } from './config/FiConfig';
+import { FiConfig, initFiConfig } from './config/FiConfig';
 import { FiLog }               from './services/FiLog';
 import { BasicInfo, PropertyInfo } from './domain/models';
 
@@ -42,6 +42,17 @@ let capturedPropertyInfo: PropertyInfo | null = null;
 
 
 document.getElementById('btnApply')!.addEventListener('click', () => {
+  // Prime iOS location permission here — this click IS a user gesture,
+  // so Safari will show the permission prompt now instead of silently
+  // denying it later when GPS is requested from inside a WebSocket handler.
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      () => FiLog.i('Main', 'Location permission granted on Apply click'),
+      (e) => FiLog.w('Main', `Location permission on Apply: ${e.message}`),
+      { enableHighAccuracy: true, timeout: 10_000, maximumAge: 0 },
+    );
+  }
+
   hide('screenMarketing');
   show('screenOTP');
   // Reset OTP screen to step 1
@@ -235,6 +246,15 @@ document.getElementById('loanForm')!.addEventListener('submit', (e) => {
 document.getElementById('btnBackToForm')!.addEventListener('click', () => {
   hide('screenReview');
   show('screenForm');
+  // Reset consent checkbox when user goes back to edit
+  (document.getElementById('consentCheck') as HTMLInputElement).checked = false;
+  (document.getElementById('btnStartFI') as HTMLButtonElement).disabled = true;
+});
+
+// Enable Start FI only when consent is checked
+document.getElementById('consentCheck')!.addEventListener('change', (e) => {
+  const checked = (e.target as HTMLInputElement).checked;
+  (document.getElementById('btnStartFI') as HTMLButtonElement).disabled = !checked;
 });
 
 document.getElementById('btnStartFI')!.addEventListener('click', () => {
@@ -285,6 +305,7 @@ async function bootFI(basicInfo: BasicInfo, propertyInfo: PropertyInfo): Promise
   const caseId   = `${safeName}_${crypto.randomUUID().substring(0, 8)}`;
   FiLog.i('Main', `Boot FI: case=${caseId}`);
 
+  await initFiConfig();   // read upload_recording flag from server
   hide('screenReview');
   show('session');
 

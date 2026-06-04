@@ -155,6 +155,30 @@ class ReportPipeline:
         )
         logger.info("[Pipeline] Address resolved: %s", self.address[:120])
 
+        # ── City match check ──────────────────────────────────────────────
+        declared_city = (
+            (self.meta.basic_info.city or "").strip()
+            if self.meta.basic_info else ""
+        )
+        if declared_city and self.address:
+            addr_lower = self.address.lower()
+            city_lower = declared_city.lower()
+            matched = city_lower in addr_lower
+            self.geo_result["city_match"] = {
+                "declared_city":  declared_city,
+                "google_address": self.address,
+                "matched":        matched,
+            }
+            if matched:
+                logger.info("[Pipeline] City match PASS — '%s' found in Google address", declared_city)
+            else:
+                logger.warning(
+                    "[Pipeline] City match FAIL — declared '%s' NOT found in Google address: %s",
+                    declared_city, self.address[:100],
+                )
+        else:
+            logger.info("[Pipeline] City match skipped — no declared city or no address")
+
     # ── Step 3: Nameplate OCR ──────────────────────────────────────────────
 
     async def _step_nameplate_ocr(self) -> None:
@@ -384,6 +408,19 @@ class ReportPipeline:
         else:
             logger.warning("[Pipeline] No mobile number in session — cannot look up vault")
 
+        # ── 1b. Common folder fallback (college-project / demo use) ──────────
+        if not vault_pdfs:
+            common_dir = vault_root / "common"
+            if common_dir.exists():
+                vault_pdfs = sorted(common_dir.glob("*.pdf"))
+                if vault_pdfs:
+                    logger.info("[Pipeline] Using common vault folder: %s — found %d PDF(s): %s",
+                                common_dir, len(vault_pdfs), [p.name for p in vault_pdfs])
+                else:
+                    logger.info("[Pipeline] Common vault folder exists but is empty: %s", common_dir)
+            else:
+                logger.info("[Pipeline] No common vault folder at %s", common_dir)
+
         # ── 2. Fall back to uploaded document (legacy path) ───────────────
         if not vault_pdfs and self.meta.documents:
             bank_doc = next(
@@ -483,6 +520,13 @@ class ReportPipeline:
         from services.storage_service import save_session_data_json
 
         logger.info("[Pipeline] Saving session_data.json...")
+        prop_info = None
+        if self.meta.property_info:
+            prop_info = {
+                "property_type": self.meta.property_info.property_type,
+                "bedrooms":      self.meta.property_info.bedrooms,
+                "hall":          self.meta.property_info.hall,
+            }
         dest = await save_session_data_json(
             self.session_id,
             self.meta,
@@ -493,6 +537,8 @@ class ReportPipeline:
             self.income_analysis,
             self.credit_analysis,
             self.cibil_score,
+            analysed_entries = self.analysed_entries,
+            property_info    = prop_info,
         )
         logger.info("[Pipeline] session_data.json saved → %s  (%.1f KB)",
                     dest, dest.stat().st_size / 1024)

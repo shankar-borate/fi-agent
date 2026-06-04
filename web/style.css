@@ -192,6 +192,36 @@ html, body {
 }
 .form-hint.warn { color: #E65100; font-weight: 600; }
 
+/* Consent checkbox on review screen */
+.consent-checkbox-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: #EFF6FF;
+  border: 1.5px solid #93C5FD;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 20px 0 12px;
+  cursor: pointer;
+  line-height: 1.55;
+}
+.consent-checkbox-label input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  margin-top: 2px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.consent-checkbox-label span {
+  font-size: 13px;
+  color: #1e3a5f;
+}
+.consent-checkbox-label:has(input:checked) {
+  background: #ECFDF5;
+  border-color: #6EE7B7;
+}
+
 /* Property Info section divider */
 .prop-section-header {
   margin: 28px 0 16px;

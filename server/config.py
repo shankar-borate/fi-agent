@@ -42,9 +42,10 @@ class Settings(BaseSettings):
     geo_radius_meters: float = 500.0
 
     # Session behaviour
-    fi_countdown_seconds: int = 5
-    fi_listen_timeout_ms: int = 12000
-    fi_pan_max_attempts:  int = 3      # OCR retry limit for PAN card
+    fi_countdown_seconds:   int  = 5
+    fi_listen_timeout_ms:   int  = 12000
+    fi_pan_max_attempts:    int  = 3       # OCR retry limit for PAN card
+    fi_upload_recording:    bool = True    # False = skip recording upload (faster Submit for demos)
 
     fi_self_photo_prompt: str = (
         "Please look straight at the camera. I will take your photo now."

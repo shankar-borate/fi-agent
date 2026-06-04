@@ -147,9 +147,12 @@ async def upload_document(
 
 @router.get("/config")
 async def get_client_config():
-    """Return client-side config so the browser knows which STT engine to use."""
+    """Return client-side config flags."""
     from config import settings
-    return {"transcribe_engine": settings.transcribe_engine}
+    return {
+        "transcribe_engine":  settings.transcribe_engine,
+        "upload_recording":   settings.fi_upload_recording,
+    }
 
 
 @router.get("/{session_id}/files")

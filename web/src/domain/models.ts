@@ -50,6 +50,7 @@ export interface FiSession {
   startedAt:     string;
   endedAt:       string;
   basicInfo:     BasicInfo;
+  propertyInfo:  PropertyInfo | null;
   answers:       QuestionAnswer[];
   photos:        PhotoCapture[];
   documents:     DocumentCapture[];

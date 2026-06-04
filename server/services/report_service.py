@@ -476,6 +476,20 @@ def _basic_info_section(meta: SessionMetadata, s: Dict) -> List:
         ("Bank",             "ABC Bank"),
         ("Product",          "Personal Loan"),
     ]
+
+    # Property info (added from application form)
+    pi = meta.property_info
+    if pi:
+        prop_type_label = {
+            "flat": "Flat / Apartment",
+            "bungalow": "Bungalow / House",
+        }.get(pi.property_type or "", pi.property_type or "—")
+        rows += [
+            ("— Property Type",    prop_type_label),
+            ("— Bedrooms",         str(pi.bedrooms)),
+            ("— Hall / Living Rm", "Yes" if pi.hall else "No"),
+        ]
+
     return [_kv_table(rows, s, label_w=5.0 * cm)]
 
 
@@ -628,8 +642,22 @@ def _location_section(geo_result: Dict[str, Any], address: str, s: Dict) -> List
 
     centroid_str = (f"{c_lat:.5f}°N, {c_lon:.5f}°E" if c_lat else "—")
     maps_link    = (f"https://maps.google.com/?q={c_lat},{c_lon}" if c_lat else "—")
+
+    # City match
+    cm = geo_result.get("city_match")
+    if cm:
+        city_match_str = (
+            f"PASS — '{cm['declared_city']}' found in Google address"
+            if cm["matched"]
+            else f"FAIL — '{cm['declared_city']}' NOT FOUND in Google address: {cm['google_address']}"
+        )
+    else:
+        city_match_str = "Not checked (GPS or city not available)"
+
     summary_rows = [
         ("Geocoded Address",        addr_display),
+        ("Declared City (Form)",    cm["declared_city"] if cm else "—"),
+        ("City Match vs GPS",       city_match_str),
         ("Session Centroid (GPS)",  centroid_str),
         ("Google Maps Link",        maps_link),
         ("Total GPS Points",        str(geo_result.get("points_checked", 0))),
@@ -639,6 +667,16 @@ def _location_section(geo_result: Dict[str, Any], address: str, s: Dict) -> List
                                     else f"FAIL — spread of {max_pw:.0f}m exceeds {GEO_THRESHOLD_M:.0f}m limit"),
     ]
     flowables += [_kv_table(summary_rows, s), Spacer(1, 8)]
+
+    # City match pill
+    if cm:
+        flowables += [_status_pill(
+            f"CITY MATCH:  {'PASS' if cm['matched'] else 'FAIL'}  "
+            f"— Declared '{cm['declared_city']}' "
+            f"{'found in' if cm['matched'] else 'NOT FOUND in'} GPS-derived address",
+            ok=cm["matched"],
+        ), Spacer(1, 6)]
+
     flowables += [_status_pill(
         f"LOCATION VERIFICATION:  {'PASS' if passed else 'FAIL'}  "
         f"({'within' if passed else 'exceeds'} {GEO_THRESHOLD_M:.0f}m threshold)",
