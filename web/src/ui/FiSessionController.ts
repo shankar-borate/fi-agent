@@ -6,17 +6,17 @@ import { TtsHelper }          from '../services/TtsHelper';
 import { LocationHelper }     from '../services/LocationHelper';
 import { CameraManager }      from '../services/CameraManager';
 import { SessionRecorder }    from '../services/SessionRecorder';
-import { SarvamSTTService }   from '../services/SarvamSTTService';
 import { DeviceDetector }     from '../services/DeviceDetector';
 import { FiSessionRepository } from '../data/FiSessionRepository';
 import { FiConfig }           from '../config/FiConfig';
-import { BasicInfo, QuestionAnswer, PhotoCapture, DocumentCapture, GeoPoint } from '../domain/models';
+import { BasicInfo, PropertyInfo, QuestionAnswer, PhotoCapture, DocumentCapture, GeoPoint } from '../domain/models';
 import { UiState }            from './UiState';
 
 export interface ControllerOptions {
   caseId:          string;
   deviceId:        string;
   basicInfo:       BasicInfo;
+  propertyInfo:    PropertyInfo;
   audioStream:     MediaStream;
   videoElement:    HTMLVideoElement;
   camera:          CameraManager;
@@ -32,11 +32,10 @@ export class FiSessionController {
   private readonly player:   AudioPlayer;
   private readonly tts:      TtsHelper;
   private readonly location: LocationHelper;
-  private readonly sarvam:   SarvamSTTService;
-
-  private readonly caseId:     string;
-  private readonly deviceId:   string;
-  private readonly basicInfo:  BasicInfo;
+  private readonly caseId:        string;
+  private readonly deviceId:      string;
+  private readonly basicInfo:     BasicInfo;
+  private readonly propertyInfo:  PropertyInfo;
   private readonly startedAt:  string;
   private readonly repo:       FiSessionRepository;
   private readonly camera:     CameraManager;
@@ -77,9 +76,10 @@ export class FiSessionController {
 
   constructor(opts: ControllerOptions) {
     this._opts      = opts;
-    this.caseId     = opts.caseId;
-    this.deviceId   = opts.deviceId;
-    this.basicInfo  = opts.basicInfo;
+    this.caseId        = opts.caseId;
+    this.deviceId      = opts.deviceId;
+    this.basicInfo     = opts.basicInfo;
+    this.propertyInfo  = opts.propertyInfo;
     this.startedAt  = new Date().toISOString();
     this.repo       = opts.repo;
     this.camera     = opts.camera;
@@ -91,7 +91,6 @@ export class FiSessionController {
     this.player   = new AudioPlayer();
     this.tts      = new TtsHelper();
     this.location = new LocationHelper();
-    this.sarvam   = new SarvamSTTService();
 
     this.ws = new WebSocketManager({
       onMessage: (msg) => { this._handleMessage(msg).catch(e => FiLog.e('Controller', 'handleMessage error', e)); },
@@ -147,6 +146,11 @@ export class FiSessionController {
         income_range:  this.basicInfo.incomeRange,
         loan_amount:   this.basicInfo.loanAmount,
       },
+      property_info: {
+        property_type: this.propertyInfo.propertyType,
+        bedrooms:      this.propertyInfo.bedrooms,
+        hall:          this.propertyInfo.hall,
+      },
     });
   }
 
@@ -172,6 +176,7 @@ export class FiSessionController {
           FiLog.i('Controller', 'Session recording started with first question');
         }
 
+        await this.camera.switchCamera('user');  // questions always face the applicant
         this.emitAndTrack({ kind: 'ShowMessage', text: this.currentQuestion });
         await this._speak(this.currentQuestion, this.lastQuestionAudio);
         this.ws.sendJson({ type: 'tts_done' });
@@ -188,7 +193,7 @@ export class FiSessionController {
       case 'start_listening': {
         const qIdx      = msg['question_index'] as number ?? 0;
         const timeoutMs = msg['timeout_ms']     as number ?? FiConfig.sttTimeoutMs;
-        FiLog.i('Controller', `Listening Q${qIdx}  engine=${FiConfig.transcribeEngine}  timeout=${timeoutMs}ms`);
+        FiLog.i('Controller', `Listening Q${qIdx}  timeout=${timeoutMs}ms`);
 
         // Show "speak now" and start recording IMMEDIATELY — GPS fetched in background
         this.emitAndTrack({ kind: 'Listening', questionIndex: qIdx });
@@ -211,34 +216,18 @@ export class FiSessionController {
             FiLog.i('Controller', `3 s silence Q${qIdx} — ending early`);
             this._clearListenTimer();
             this.recorder.stop();
-            if (FiConfig.transcribeEngine === 'sarvam') {
-              this.sarvam.triggerFlush();
-            } else {
-              this.ws.sendJson({ type: 'audio_end' });
-            }
+            this.ws.sendJson({ type: 'audio_end' });
           }
         };
 
-        if (FiConfig.transcribeEngine === 'sarvam') {
-          const text = await this.sarvam.listen(
-            timeoutMs,
-            (onChunk) => this.recorder.start((chunk) => { onChunkSilence(chunk); onChunk(chunk); }),
-            ()        => this.recorder.stop(),
-            (partial) => this.emitAndTrack({ kind: 'ShowTranscript', text: partial, isFinal: false }),
-          );
+        // Send raw PCM to server (AWS Transcribe)
+        this.recorder.start((chunk) => { this.ws.sendBinary(chunk); onChunkSilence(chunk); });
+        this._clearListenTimer();
+        this.listenTimerId = window.setTimeout(() => {
+          FiLog.i('Controller', 'Listen timeout → audio_end');
           this.recorder.stop();
-          FiLog.i('Controller', `Sarvam transcript Q${qIdx}: '${text}'`);
-          this.ws.sendJson({ type: 'transcript_result', question_index: qIdx, text });
-        } else {
-          // AWS path — send raw PCM to server
-          this.recorder.start((chunk) => { this.ws.sendBinary(chunk); onChunkSilence(chunk); });
-          this._clearListenTimer();
-          this.listenTimerId = window.setTimeout(() => {
-            FiLog.i('Controller', 'Listen timeout → audio_end');
-            this.recorder.stop();
-            this.ws.sendJson({ type: 'audio_end' });
-          }, timeoutMs);
-        }
+          this.ws.sendJson({ type: 'audio_end' });
+        }, timeoutMs);
         break;
       }
 
@@ -272,10 +261,13 @@ export class FiSessionController {
       }
 
       case 'announce_photo': {
-        const prompt = msg['prompt']   as string ?? '';
-        const audio  = msg['audio']    as string ?? '';
+        const prompt    = msg['prompt']    as string  ?? '';
+        const audio     = msg['audio']     as string  ?? '';
+        const isSelfie  = msg['is_selfie'] as boolean ?? false;
         this.lastPrompt = prompt;
-        FiLog.i('Controller', `Announce photo: ${prompt}`);
+        FiLog.i('Controller', `Announce photo: selfie=${isSelfie} ${prompt}`);
+        // Switch camera now so the preview is already correct during countdown
+        await this.camera.switchCamera(isSelfie ? 'user' : 'environment');
         this.emitAndTrack({ kind: 'ShowMessage', text: prompt });
         await this._speak(prompt, audio);
         this.ws.sendJson({ type: 'tts_done' });
@@ -553,7 +545,6 @@ export class FiSessionController {
   destroy(): void {
     this._clearListenTimer();
     this._clearConfirmTimer();
-    this.sarvam.close();
     this.recorder.destroy();
     this.player.stop();
     this.tts.stop();

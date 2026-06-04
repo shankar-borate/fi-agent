@@ -32,6 +32,10 @@ def _async_retry(max_attempts: int = 3, delay_s: float = 2.0):
             for attempt in range(1, max_attempts + 1):
                 try:
                     return await fn(*args, **kwargs)
+                except (AuthenticationError, PermissionDeniedError) as exc:
+                    # Wrong API key or access denied — retrying won't help
+                    logger.error("[OpenAI] Non-retryable error: %s", exc)
+                    raise
                 except Exception as exc:
                     last_exc = exc
                     if attempt < max_attempts:
@@ -49,11 +53,30 @@ def _async_retry(max_attempts: int = 3, delay_s: float = 2.0):
         return wrapper
     return decorator
 
-from openai import AsyncOpenAI
+import httpx
+from openai import AsyncOpenAI, AuthenticationError, PermissionDeniedError
 
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+# ── Singleton client ──────────────────────────────────────────────────────────
+# Created once and reused for the process lifetime.
+# Passing an explicit http_client prevents the OpenAI SDK from calling
+# httpx.AsyncClient(proxies=…), which was removed in httpx 0.28 and causes
+# "__init__() got an unexpected keyword argument 'proxies'" on newer installs.
+
+_client: Optional[AsyncOpenAI] = None
+
+
+def _get_client() -> AsyncOpenAI:
+    global _client
+    if _client is None:
+        _client = AsyncOpenAI(
+            api_key=settings.openai_api_key,
+            http_client=httpx.AsyncClient(timeout=httpx.Timeout(60.0)),
+        )
+    return _client
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
@@ -315,7 +338,7 @@ async def _analyze_image_with_retry(image_path: Path, prompt: str, tag: str = ""
     logger.info("[OpenAI] Analysing %s  tag=%s (%.1f KB)", image_path.name, tag or "generic",
                 image_path.stat().st_size / 1024)
     b64    = base64.b64encode(image_path.read_bytes()).decode()
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    client = _get_client()
     resp   = await client.chat.completions.create(
         model=settings.openai_model,
         max_tokens=500,
@@ -325,7 +348,7 @@ async def _analyze_image_with_retry(image_path: Path, prompt: str, tag: str = ""
                 "role": "user",
                 "content": [
                     {"type": "image_url",
-                     "image_url": {"url": f"data:{mime};base64,{b64}", "detail": "low"}},
+                     "image_url": {"url": f"data:{mime};base64,{b64}", "detail": "auto"}},
                     {"type": "text",
                      "text": user_text},
                 ],
@@ -405,15 +428,19 @@ async def analyze_bank_statement(pdf_path: Path) -> Dict[str, Any]:
         return {"error": f"PDF read failed: {exc}", "creditworthiness_score": 0}
 
     if not text.strip():
-        logger.warning("[OpenAI] No text extracted from %s", pdf_path.name)
+        logger.warning("[OpenAI] No text extracted from %s — likely a scanned PDF", pdf_path.name)
         return {"error": "No readable text in PDF (scanned image?)", "creditworthiness_score": 0}
 
     # Limit text sent to GPT to ~12 000 chars (~3 k tokens)
     MAX_CHARS = 12_000
     snippet   = text[:MAX_CHARS]
+    logger.info("[OpenAI] Bank statement: sending %d chars to GPT-4o (truncated=%s)",
+                len(snippet), len(text) > MAX_CHARS)
 
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = _get_client()
+        logger.info("[OpenAI] Bank statement: calling chat.completions.create (model=%s)...",
+                    settings.openai_model)
         resp = await client.chat.completions.create(
             model=settings.openai_model,
             temperature=0.1,
@@ -622,9 +649,18 @@ async def comprehensive_credit_analysis(
         pan_summary=pan_str,    nameplate_text=nameplate_str,
         income_summary=income_str, location_summary=loc_str,
     )
+    logger.info(
+        "[OpenAI] Credit analysis: applicant=%s  photos=%d  qa=%d  "
+        "pan_ok=%s  income_ok=%s  prompt_len=%d",
+        basic_str[:50], len(image_analyses), len(meta.questions) if meta else 0,
+        bool(pan_verification), bool(income_analysis and not income_analysis.get("error")),
+        len(prompt),
+    )
 
     try:
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = _get_client()
+        logger.info("[OpenAI] Credit analysis: calling chat.completions.create (model=%s)...",
+                    settings.openai_model)
         resp   = await client.chat.completions.create(
             model=settings.openai_model,
             temperature=0.1,
@@ -635,14 +671,67 @@ async def comprehensive_credit_analysis(
                 {"role": "user",   "content": prompt},
             ],
         )
-        result = _json.loads(resp.choices[0].message.content or "{}")
-        logger.info("[OpenAI] Credit analysis done — score=%s grade=%s rec=%s",
+        raw    = resp.choices[0].message.content or "{}"
+        logger.info("[OpenAI] Credit analysis response: %d chars", len(raw))
+        result = _json.loads(raw)
+        logger.info("[OpenAI] Credit analysis done — score=%s  grade=%s  recommendation=%s",
                     result.get("overall_credit_score"),
                     result.get("risk_grade"),
                     result.get("recommendation"))
         return result
     except Exception as exc:
-        logger.error("[OpenAI] Credit analysis failed: %s", exc)
+        logger.error("[OpenAI] Credit analysis FAILED: %s", exc, exc_info=True)
+        return {"error": str(exc)}
+
+
+# ── PAN card structured OCR ───────────────────────────────────────────────────
+
+async def extract_pan_fields_gpt4o(image_path: Path) -> Dict[str, Any]:
+    """
+    Use GPT-4o Vision to extract structured fields from a PAN card image.
+    Returns {"pan_number", "name", "father_name", "dob"} — empty string if not readable.
+    Falls back gracefully: caller should check for "error" key.
+    """
+    if not settings.openai_api_key:
+        return {"error": "OpenAI key not set"}
+    if not image_path.exists():
+        return {"error": f"File not found: {image_path.name}"}
+
+    suffix = image_path.suffix.lower().lstrip(".")
+    mime   = "image/jpeg" if suffix in ("jpg", "jpeg") else f"image/{suffix}"
+    b64    = base64.b64encode(image_path.read_bytes()).decode()
+
+    prompt = (
+        "This is an Indian PAN card photograph. "
+        "Extract the printed text and return ONLY a JSON object — no markdown, no explanation:\n"
+        '{"pan_number":"","name":"","father_name":"","dob":""}\n'
+        "Rules: pan_number = exactly 10 chars, format AAAAA9999A. "
+        "dob = DD/MM/YYYY. Use empty string for any field that is not clearly visible."
+    )
+
+    try:
+        resp = await _get_client().chat.completions.create(
+            model=settings.openai_model,
+            max_tokens=150,
+            response_format={"type": "json_object"},
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:{mime};base64,{b64}", "detail": "high"}},
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+        )
+        raw    = (resp.choices[0].message.content or "{}").strip()
+        result = _json.loads(raw)
+        logger.info(
+            "[OpenAI] PAN OCR — PAN=%s  name=%s  dob=%s",
+            result.get("pan_number"), result.get("name"), result.get("dob"),
+        )
+        return result
+    except Exception as exc:
+        logger.error("[OpenAI] PAN OCR failed: %s", exc)
         return {"error": str(exc)}
 
 
@@ -652,18 +741,20 @@ async def analyze_all_images(
     photo_entries: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """
-    Analyse all photos concurrently.
+    Analyse all photos with bounded concurrency to avoid rate-limit errors.
 
     photo_entries — list of dicts with keys: filename, prompt, file_path (Path)
     Returns the same list with an 'analysis' key added to each entry.
     """
     logger.info("[OpenAI] Starting batch analysis of %d images", len(photo_entries))
+    sem = asyncio.Semaphore(3)   # max 3 concurrent Vision calls
 
     async def _analyse_one(entry: Dict[str, Any]) -> Dict[str, Any]:
-        analysis = await analyze_image(
-            entry["file_path"], entry.get("prompt", ""),
-            tag=entry.get("tag", ""),
-        )
+        async with sem:
+            analysis = await analyze_image(
+                entry["file_path"], entry.get("prompt", ""),
+                tag=entry.get("tag", ""),
+            )
         return {**entry, "analysis": analysis}
 
     results = await asyncio.gather(*[_analyse_one(e) for e in photo_entries])

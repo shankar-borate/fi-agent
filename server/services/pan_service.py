@@ -154,8 +154,36 @@ def extract_pan_data_sync(image_path: Path) -> Dict[str, Any]:
 
 
 async def extract_pan_data(image_path: Path) -> Dict[str, Any]:
-    """Async wrapper — offloads boto3 call to the thread pool."""
-    return await asyncio.to_thread(extract_pan_data_sync, image_path)
+    """
+    Extract PAN card fields.
+    Primary: GPT-4o Vision (handles varied layouts, rotation, lighting).
+    Fallback: AWS Textract + rule-based parser.
+    """
+    # ── Primary: GPT-4o Vision ────────────────────────────────────────────
+    try:
+        from services.openai_service import extract_pan_fields_gpt4o
+        result = await extract_pan_fields_gpt4o(image_path)
+        if not result.get("error"):
+            pan = result.get("pan_number", "").strip().upper()
+            if _PAN_RE.match(pan):
+                result["pan_number"] = pan
+                result.setdefault("source", "gpt4o")
+                logger.info("[PAN] GPT-4o OCR: PAN=%s  name=%s", pan, result.get("name"))
+                return result
+            logger.info(
+                "[PAN] GPT-4o returned invalid PAN ('%s') — trying Textract", pan
+            )
+        else:
+            logger.warning(
+                "[PAN] GPT-4o failed (%s) — falling back to Textract", result["error"]
+            )
+    except Exception as exc:
+        logger.warning("[PAN] GPT-4o unavailable (%s) — falling back to Textract", exc)
+
+    # ── Fallback: AWS Textract ────────────────────────────────────────────
+    textract_result = await asyncio.to_thread(extract_pan_data_sync, image_path)
+    textract_result.setdefault("source", "textract")
+    return textract_result
 
 
 # ── NSDL PAN Verification ─────────────────────────────────────────────────────

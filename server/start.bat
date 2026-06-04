@@ -115,11 +115,11 @@ echo.
 if /i "%MODE%"=="dev" (
     echo  [MODE]  Development ^(auto-reload enabled^)
     echo.
-    "%PYTHON%" -m uvicorn main:app --host 0.0.0.0 --port %PORT% --reload
+    nohup "%PYTHON%" -m uvicorn main:app --host 0.0.0.0 --port %PORT% --workers 1 >> fiagent.log 2>&1 &
 ) else (
     echo  [MODE]  Production
     echo.
-    "%PYTHON%" -m uvicorn main:app --host 0.0.0.0 --port %PORT% --workers 1
+    nohup "%PYTHON%" -m uvicorn main:app --host 0.0.0.0 --port %PORT% --workers 1 >> fiagent.log 2>&1 &
 )
 
 endlocal

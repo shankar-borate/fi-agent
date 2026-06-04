@@ -240,6 +240,40 @@
         <p class="form-hint" id="loanAmountHint">Enter amount in rupees</p>
       </div>
 
+      <!-- ── Property Info ───────────────────────────────────── -->
+      <div class="prop-section-header">
+        <h3 class="prop-section-title">🏠 Property Info</h3>
+        <p  class="prop-section-sub">Determines which home photos will be captured</p>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label" for="propertyType">Type of Property <span class="req">*</span></label>
+          <select class="form-input form-select" id="propertyType" required>
+            <option value="" disabled selected>Select type</option>
+            <option value="flat">Flat / Apartment</option>
+            <option value="bungalow">Bungalow / House</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="bedrooms">Bedrooms <span class="req">*</span></label>
+          <select class="form-input form-select" id="bedrooms" required>
+            <option value="" disabled selected>Select</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-group" style="max-width:180px">
+        <label class="form-label" for="hall">Hall / Living Room</label>
+        <select class="form-input form-select" id="hall">
+          <option value="1" selected>Yes</option>
+          <option value="0">No</option>
+        </select>
+      </div>
+
       <p id="formError" class="error-msg hidden"></p>
       <button type="submit" class="btn btn-primary btn-full">Review Application</button>
     </form>

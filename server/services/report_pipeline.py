@@ -57,37 +57,83 @@ class ReportPipeline:
     # ── Public entry point ─────────────────────────────────────────────────
 
     async def run(self) -> None:
-        """Execute all pipeline steps in order, swallowing per-step failures."""
-        logger.info("[Pipeline] Starting for session %s", self.session_id)
-        try:
-            await self._step_geo_verification()
-            await self._step_reverse_geocode()
-            await self._step_nameplate_ocr()
-            await self._step_pan_verification()
-            await self._step_image_analysis()
-            await self._step_income_analysis()
-            await self._step_cibil_score()
-            await self._step_credit_analysis()
-            await self._step_save_session_data()
-            await self._step_generate_pdf()
-        except Exception as exc:
-            logger.exception("[Pipeline] Unhandled failure for %s: %s", self.session_id, exc)
+        """
+        Execute all pipeline steps in order.
+        Each step is isolated: a failure in one step is logged and the pipeline
+        continues to the next step so the PDF is always attempted.
+        """
+        logger.info(
+            "[Pipeline] ══ START session=%s  photos=%d  questions=%d ══",
+            self.session_id,
+            len(self.meta.photos),
+            len(self.meta.questions),
+        )
+        if self.meta.basic_info:
+            bi = self.meta.basic_info
+            logger.info(
+                "[Pipeline] Applicant: %s %s  mobile=%s  pan=%s",
+                bi.first_name, bi.last_name, bi.mobile_number, bi.pan_number,
+            )
+        for ph in self.meta.photos:
+            logger.info(
+                "[Pipeline] Photo: %s  tag=%-12s  selfie=%s",
+                ph.filename, ph.tag or "(none)", ph.is_selfie,
+            )
+
+        steps = [
+            self._step_geo_verification,
+            self._step_reverse_geocode,
+            self._step_nameplate_ocr,
+            self._step_pan_verification,
+            self._step_image_analysis,
+            self._step_income_analysis,
+            self._step_cibil_score,
+            self._step_credit_analysis,
+            self._step_save_session_data,
+            self._step_generate_pdf,
+        ]
+
+        failed = []
+        for step in steps:
+            name = step.__name__
+            logger.info("[Pipeline] ── %s: starting ──", name)
+            try:
+                await step()
+                logger.info("[Pipeline] ── %s: OK ──", name)
+            except Exception as exc:
+                failed.append(name)
+                logger.exception("[Pipeline] ── %s: FAILED — %s ──", name, exc)
+
+        if failed:
+            logger.warning(
+                "[Pipeline] ══ DONE (with failures) session=%s  failed_steps=%s ══",
+                self.session_id, failed,
+            )
         else:
-            logger.info("[Pipeline] Completed for session %s", self.session_id)
+            logger.info(
+                "[Pipeline] ══ DONE (all steps OK) session=%s ══",
+                self.session_id,
+            )
 
     # ── Step 1: Geo verification ───────────────────────────────────────────
 
     async def _step_geo_verification(self) -> None:
         from services.geo_service import collect_geo_points, verify_location
         geo_points = collect_geo_points(self.meta)
+        logger.info("[Pipeline] Geo: %d points collected", len(geo_points))
+        for i, pt in enumerate(geo_points):
+            logger.debug("[Pipeline] Geo[%d]: lat=%.5f  lon=%.5f  src=%s",
+                         i, pt.get("latitude", 0), pt.get("longitude", 0), pt.get("source", "?"))
         self.geo_result = verify_location(geo_points, radius_m=settings.geo_radius_meters)
         logger.info(
-            "[Pipeline] Geo: verified=%s  pairwise_max=%.0fm",
+            "[Pipeline] Geo: verified=%s  points=%d  pairwise_max=%.0fm",
             self.geo_result.get("verified"),
+            self.geo_result.get("points_checked", 0),
             self.geo_result.get("max_pairwise_distance_m", 0),
         )
-        await self._save_response("geo_verification.json",
-                                  json.dumps(self.geo_result, indent=2))
+        saved = await self._save_response("geo_verification.json",
+                                          json.dumps(self.geo_result, indent=2))
+        logger.info("[Pipeline] Saved → %s", saved)
 
     # ── Step 2: Reverse geocode ────────────────────────────────────────────
 
@@ -97,13 +143,17 @@ class ReportPipeline:
         first_point = next(
             (p for p in geo_points if p.get("latitude") and p.get("longitude")), None
         )
-        if first_point:
-            self.address = await reverse_geocode(
-                first_point["latitude"],
-                first_point["longitude"],
-                settings.google_maps_api_key,
-            )
-            logger.info("[Pipeline] Address: %s", self.address[:80])
+        if not first_point:
+            logger.warning("[Pipeline] Reverse geocode skipped — no GPS points available")
+            return
+        logger.info("[Pipeline] Reverse geocode: lat=%.5f  lon=%.5f",
+                    first_point["latitude"], first_point["longitude"])
+        self.address = await reverse_geocode(
+            first_point["latitude"],
+            first_point["longitude"],
+            settings.google_maps_api_key,
+        )
+        logger.info("[Pipeline] Address resolved: %s", self.address[:120])
 
     # ── Step 3: Nameplate OCR ──────────────────────────────────────────────
 
@@ -113,13 +163,19 @@ class ReportPipeline:
             (ph for ph in self.meta.photos
              if ph.tag == "nameplate" or "nameplate" in ph.prompt.lower()), None
         )
-        if nameplate_photo:
-            path = self.storage / nameplate_photo.filename
-            self.nameplate_ocr = await extract_nameplate_text(path)
-            await self._save_response("nameplate_ocr.json",
-                                      json.dumps(self.nameplate_ocr, indent=2, default=str))
-            logger.info("[Pipeline] Nameplate: %s",
-                        (self.nameplate_ocr or {}).get("raw_text", "")[:60])
+        if not nameplate_photo:
+            logger.info("[Pipeline] Nameplate OCR skipped — no nameplate photo in session")
+            return
+        path = self.storage / nameplate_photo.filename
+        logger.info("[Pipeline] Nameplate OCR: %s  (exists=%s  size=%s)",
+                    nameplate_photo.filename, path.exists(),
+                    f"{path.stat().st_size} bytes" if path.exists() else "N/A")
+        self.nameplate_ocr = await extract_nameplate_text(path)
+        raw = (self.nameplate_ocr or {}).get("raw_text", "")
+        logger.info("[Pipeline] Nameplate text: '%s'", raw[:120])
+        saved = await self._save_response("nameplate_ocr.json",
+                                          json.dumps(self.nameplate_ocr, indent=2, default=str))
+        logger.info("[Pipeline] Saved → %s", saved)
 
     # ── Step 4: PAN card verification ─────────────────────────────────────
 
@@ -131,39 +187,79 @@ class ReportPipeline:
         from services.report_service import extract_customer_name
 
         pan_photo    = next(
-            (ph for ph in self.meta.photos if "pan" in ph.prompt.lower()), None
+            (ph for ph in self.meta.photos if "pan" in ph.prompt.lower() or ph.tag == "pan"), None
         )
         selfie_photo = next((ph for ph in self.meta.photos if ph.is_selfie), None)
 
         if not pan_photo:
+            logger.warning("[Pipeline] PAN verification skipped — no PAN photo found in session")
+            logger.info("[Pipeline] Available photo tags: %s",
+                        [ph.tag for ph in self.meta.photos])
             return
 
         pan_path = self.storage / pan_photo.filename
-        pan_ocr  = await extract_pan_data(pan_path)
+        logger.info("[Pipeline] PAN photo: %s  (exists=%s  size=%s)",
+                    pan_photo.filename, pan_path.exists(),
+                    f"{pan_path.stat().st_size} bytes" if pan_path.exists() else "N/A")
 
+        if not pan_path.exists():
+            logger.error("[Pipeline] PAN image file missing: %s", pan_path)
+            return
+
+        # ── OCR ──────────────────────────────────────────────────────────
+        logger.info("[Pipeline] PAN OCR starting...")
+        pan_ocr = await extract_pan_data(pan_path)
+        logger.info(
+            "[Pipeline] PAN OCR result: PAN=%s  name='%s'  father='%s'  dob=%s  source=%s  error=%s",
+            pan_ocr.get("pan_number", "(empty)"),
+            pan_ocr.get("name", "(empty)"),
+            pan_ocr.get("father_name", "(empty)"),
+            pan_ocr.get("dob", "(empty)"),
+            pan_ocr.get("source", "?"),
+            pan_ocr.get("error", "none"),
+        )
+
+        # ── Name matching ─────────────────────────────────────────────────
         form_name      = (
             f"{self.meta.basic_info.first_name} {self.meta.basic_info.last_name}".strip()
             if self.meta.basic_info else ""
         )
         interview_name = form_name or extract_customer_name(self.meta)
-        two_way        = match_name(pan_ocr.get("name", ""), interview_name)
-        three_way      = NameMatcher(
+        logger.info("[Pipeline] Name match: pan='%s'  form='%s'  interview='%s'",
+                    pan_ocr.get("name", ""), form_name, interview_name)
+        two_way   = match_name(pan_ocr.get("name", ""), interview_name)
+        three_way = NameMatcher(
             form_name,
             pan_ocr.get("name", ""),
             (self.nameplate_ocr or {}).get("raw_text", ""),
         ).compare().as_dict()
+        logger.info("[Pipeline] Name match result: 2-way=%s  3-way=%s",
+                    two_way.get("matched"), three_way.get("status"))
 
-        nsdl_result  = await verify_pan_nsdl(
+        # ── NSDL ─────────────────────────────────────────────────────────
+        logger.info("[Pipeline] NSDL check: PAN=%s", pan_ocr.get("pan_number", "(empty)"))
+        nsdl_result = await verify_pan_nsdl(
             pan_number  = pan_ocr.get("pan_number", ""),
             name        = pan_ocr.get("name", ""),
             father_name = pan_ocr.get("father_name", ""),
             dob         = pan_ocr.get("dob", ""),
         )
+        logger.info("[Pipeline] NSDL: verified=%s  status=%s",
+                    nsdl_result.get("verified"), nsdl_result.get("pan_status"))
 
+        # ── Face match ────────────────────────────────────────────────────
         face_result: Dict[str, Any] = {"error": "Selfie not available", "similarity_score": 0.0}
         if selfie_photo:
             selfie_path = self.storage / selfie_photo.filename
+            logger.info("[Pipeline] Face match: selfie=%s  pan=%s",
+                        selfie_photo.filename, pan_photo.filename)
             face_result = await face_match(selfie_path, pan_path)
+            logger.info("[Pipeline] Face match: similarity=%.1f%%  matched=%s  error=%s",
+                        face_result.get("similarity_score", 0),
+                        face_result.get("matched"),
+                        face_result.get("error", "none"))
+        else:
+            logger.warning("[Pipeline] Face match skipped — no selfie photo found")
 
         self.pan_verification = {
             "ocr":             pan_ocr,
@@ -174,10 +270,12 @@ class ReportPipeline:
             "filename":        pan_photo.filename,
             "geo":             pan_photo.geo,
         }
-        await self._save_response("pan_verification.json",
-                                  json.dumps(self.pan_verification, indent=2, default=str))
+        saved = await self._save_response("pan_verification.json",
+                                          json.dumps(self.pan_verification, indent=2, default=str))
+        logger.info("[Pipeline] PAN verification saved → %s", saved)
         logger.info(
-            "[Pipeline] PAN: verified=%s  name_match=%s  face=%.1f%%",
+            "[Pipeline] PAN summary: ocr_ok=%s  nsdl=%s  name_match=%s  face=%.1f%%",
+            bool(pan_ocr.get("pan_number")),
             nsdl_result.get("verified"),
             two_way.get("matched"),
             face_result.get("similarity_score", 0),
@@ -189,34 +287,57 @@ class ReportPipeline:
         from services.openai_service import analyze_all_images
 
         pan_photo    = next(
-            (ph for ph in self.meta.photos if "pan" in ph.prompt.lower()), None
+            (ph for ph in self.meta.photos if "pan" in ph.prompt.lower() or ph.tag == "pan"), None
         )
         scene_photos = [ph for ph in self.meta.photos if ph is not pan_photo]
 
+        logger.info("[Pipeline] Image analysis: %d scene photos (PAN excluded)",
+                    len(scene_photos))
+        for ph in scene_photos:
+            fp = self.storage / ph.filename
+            logger.info("[Pipeline]   ↳ %s  tag=%-12s  exists=%s  size=%s",
+                        ph.filename, ph.tag or "(none)", fp.exists(),
+                        f"{fp.stat().st_size} bytes" if fp.exists() else "MISSING")
+
+        missing = [ph for ph in scene_photos if not (self.storage / ph.filename).exists()]
+        if missing:
+            logger.error("[Pipeline] %d photo file(s) missing on disk: %s",
+                         len(missing), [ph.filename for ph in missing])
+
         photo_entries = [
             {
-                "filename":  ph.filename,
-                "prompt":    ph.prompt,
-                "is_selfie": ph.is_selfie,
-                "tag":       ph.tag,
-                "file_path": self.storage / ph.filename,
-                "geo":       ph.geo,
+                "filename":   ph.filename,
+                "prompt":     ph.prompt,
+                "is_selfie":  ph.is_selfie,
+                "tag":        ph.tag,
+                "file_path":  self.storage / ph.filename,
+                "geo":        ph.geo,
                 "blur_score": ph.blur_score,
             }
             for ph in scene_photos
         ]
 
+        logger.info("[Pipeline] Sending %d photos to GPT-4o Vision...", len(photo_entries))
         self.analysed_entries = await analyze_all_images(photo_entries)
+        logger.info("[Pipeline] GPT-4o Vision analysis complete — %d results",
+                    len(self.analysed_entries))
 
         for i, entry in enumerate(self.analysed_entries):
-            await self._save_response(f"photo_{i}_analysis.txt",
-                                      entry.get("analysis", ""))
+            analysis = entry.get("analysis", "")
+            status   = "OK" if analysis and not analysis.startswith("Image") else "EMPTY/ERROR"
+            logger.info("[Pipeline]   [%d] %s  tag=%-12s  chars=%d  status=%s",
+                        i, entry.get("filename", "?"), entry.get("tag", "?"),
+                        len(analysis), status)
+            saved = await self._save_response(f"photo_{i}_{entry.get('tag','unknown')}_analysis.txt",
+                                              analysis)
+            logger.info("[Pipeline]   Saved → %s", saved)
 
         # Attach nameplate OCR to the nameplate entry
         if self.nameplate_ocr:
             for entry in self.analysed_entries:
                 if entry.get("tag") == "nameplate" or "nameplate" in entry.get("prompt", "").lower():
                     entry["nameplate_ocr"] = self.nameplate_ocr
+                    logger.info("[Pipeline] Nameplate OCR attached to image entry")
 
     # ── Step 6: Income / bank statement analysis ───────────────────────────
 
@@ -264,12 +385,24 @@ class ReportPipeline:
 
         # ── 3. Analyse first PDF (most recent alphabetically) ─────────────
         target_pdf = vault_pdfs[-1]   # last = likely most recent when sorted by name
-        logger.info("[Pipeline] Analysing bank statement: %s", target_pdf.name)
+        logger.info("[Pipeline] Bank statement: %s  (%.1f KB)",
+                    target_pdf.name, target_pdf.stat().st_size / 1024)
         self.income_analysis = await analyze_bank_statement(target_pdf)
-        await self._save_response("income_analysis.json",
-                                  json.dumps(self.income_analysis, indent=2))
-        logger.info("[Pipeline] Income analysis: creditworthiness=%s",
-                    (self.income_analysis or {}).get("creditworthiness_score"))
+        if self.income_analysis.get("error"):
+            logger.error("[Pipeline] Bank statement analysis error: %s",
+                         self.income_analysis["error"])
+        else:
+            logger.info(
+                "[Pipeline] Income: avg_income=₹%.0f  avg_expenses=₹%.0f  "
+                "salary=%s  creditworthiness=%s/10",
+                self.income_analysis.get("avg_monthly_income", 0),
+                self.income_analysis.get("avg_monthly_expenses", 0),
+                self.income_analysis.get("salary_detected"),
+                self.income_analysis.get("creditworthiness_score"),
+            )
+        saved = await self._save_response("income_analysis.json",
+                                          json.dumps(self.income_analysis, indent=2))
+        logger.info("[Pipeline] Saved → %s", saved)
 
     # ── Step 6b: CIBIL score lookup ────────────────────────────────────────
 
@@ -279,39 +412,62 @@ class ReportPipeline:
         pan = (self.pan_verification or {}).get("ocr", {}).get("pan_number", "")
         if not pan and self.meta.basic_info:
             pan = self.meta.basic_info.pan_number
+        logger.info("[Pipeline] CIBIL lookup: PAN=%s", pan or "(empty)")
 
         self.cibil_score = await get_cibil_score(pan, self.income_analysis)
-        await self._save_response("cibil_score.json",
-                                  json.dumps(self.cibil_score, indent=2))
-        logger.info("[Pipeline] CIBIL: %d (%s)", self.cibil_score["score"],
-                    self.cibil_score["grade"])
+        logger.info("[Pipeline] CIBIL: score=%d  grade=%s",
+                    self.cibil_score["score"], self.cibil_score["grade"])
+        saved = await self._save_response("cibil_score.json",
+                                          json.dumps(self.cibil_score, indent=2))
+        logger.info("[Pipeline] Saved → %s", saved)
 
     # ── Step 7: Comprehensive credit analysis ──────────────────────────────
 
     async def _step_credit_analysis(self) -> None:
         from services.openai_service import comprehensive_credit_analysis
 
-        try:
-            self.credit_analysis = await comprehensive_credit_analysis(
-                self.meta,
-                self.geo_result,
-                self.address,
-                self.pan_verification,
-                self.nameplate_ocr,
-                self.income_analysis,
-                self.analysed_entries,
+        logger.info(
+            "[Pipeline] Credit analysis input: "
+            "geo=%s  pan_verified=%s  income_ok=%s  photos=%d  interview_q=%d",
+            self.geo_result.get("verified"),
+            bool(self.pan_verification),
+            self.income_analysis is not None and not self.income_analysis.get("error"),
+            len(self.analysed_entries),
+            len(self.meta.questions),
+        )
+
+        self.credit_analysis = await comprehensive_credit_analysis(
+            self.meta,
+            self.geo_result,
+            self.address,
+            self.pan_verification,
+            self.nameplate_ocr,
+            self.income_analysis,
+            self.analysed_entries,
+        )
+
+        if self.credit_analysis.get("error"):
+            logger.error("[Pipeline] Credit analysis returned error: %s",
+                         self.credit_analysis["error"])
+        else:
+            logger.info(
+                "[Pipeline] Credit analysis: score=%s  grade=%s  recommendation=%s",
+                self.credit_analysis.get("overall_credit_score"),
+                self.credit_analysis.get("risk_grade"),
+                self.credit_analysis.get("recommendation"),
             )
-            await self._save_response("credit_analysis.json",
-                                      json.dumps(self.credit_analysis, indent=2))
-        except Exception as exc:
-            logger.error("[Pipeline] Credit analysis failed: %s", exc)
+
+        saved = await self._save_response("credit_analysis.json",
+                                          json.dumps(self.credit_analysis, indent=2))
+        logger.info("[Pipeline] Saved → %s", saved)
 
     # ── Step 8: Save session_data.json ─────────────────────────────────────
 
     async def _step_save_session_data(self) -> None:
         from services.storage_service import save_session_data_json
 
-        await save_session_data_json(
+        logger.info("[Pipeline] Saving session_data.json...")
+        dest = await save_session_data_json(
             self.session_id,
             self.meta,
             self.geo_result,
@@ -322,6 +478,8 @@ class ReportPipeline:
             self.credit_analysis,
             self.cibil_score,
         )
+        logger.info("[Pipeline] session_data.json saved → %s  (%.1f KB)",
+                    dest, dest.stat().st_size / 1024)
 
     # ── Step 9: Generate PDF ────────────────────────────────────────────────
 
@@ -329,6 +487,7 @@ class ReportPipeline:
         import asyncio
         from services.report_service import generate_credit_report
 
+        logger.info("[Pipeline] Generating PDF report...")
         pdf_path = await asyncio.to_thread(
             generate_credit_report,
             self.meta,
@@ -341,11 +500,12 @@ class ReportPipeline:
             self.credit_analysis,
             self.cibil_score,
         )
-        logger.info("[Pipeline] PDF ready: %s  (%.1f KB)",
+        logger.info("[Pipeline] ✓ PDF ready: %s  (%.1f KB)",
                     pdf_path, pdf_path.stat().st_size / 1024)
 
     # ── Private helpers ────────────────────────────────────────────────────
 
-    async def _save_response(self, filename: str, content: str) -> None:
+    async def _save_response(self, filename: str, content: str) -> "Path":
         from services.storage_service import save_response
-        await save_response(self.session_id, filename, content)
+        dest = await save_response(self.session_id, filename, content)
+        return dest

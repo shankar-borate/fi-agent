@@ -52,17 +52,24 @@ class DocumentMeta(BaseModel):
     uploaded_at:   Optional[str] = None
 
 
+class PropertyInfo(BaseModel):
+    property_type: str = "flat"      # "flat" | "bungalow"
+    bedrooms:      int = 1           # 1 | 2 | 3
+    hall:          int = 1           # 0 | 1
+
+
 class SessionMetadata(BaseModel):
     session_id:         str
-    device_id:          Optional[str]        = None
+    device_id:          Optional[str]          = None
     started_at:         str
     ended_at:           str
-    basic_info:         Optional[BasicInfo]  = None
-    device_info:        Optional[DeviceInfo] = None
-    questions:          List[QuestionAnswer] = []
-    photos:             List[PhotoMeta]      = []
-    documents:          List[DocumentMeta]   = []
-    recording_filename: Optional[str]    = None
+    basic_info:         Optional[BasicInfo]    = None
+    property_info:      Optional[PropertyInfo] = None
+    device_info:        Optional[DeviceInfo]   = None
+    questions:          List[QuestionAnswer]   = []
+    photos:             List[PhotoMeta]        = []
+    documents:          List[DocumentMeta]     = []
+    recording_filename: Optional[str]          = None
 
 
 class PhotoUploadResponse(BaseModel):

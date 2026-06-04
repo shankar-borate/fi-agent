@@ -58,6 +58,26 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime(_ISO)
 
 
+# ── Photo prompt builder ──────────────────────────────────────────────────────
+
+def _build_photo_prompts(property_info: dict) -> list[str]:
+    """Return the ordered list of room photo prompts based on property configuration."""
+    bedrooms = max(1, int(property_info.get("bedrooms", 1)))
+    hall     = int(property_info.get("hall", 1))
+
+    prompts = [
+        "Please show your home nameplate or door nameplate clearly so the name and address text is readable.",
+    ]
+    if hall >= 1:
+        prompts.append("Please show the hall or living room.")
+    prompts.append("Please show your kitchen.")
+    prompts.append("Please show Bedroom 1.")
+    if bedrooms >= 2:
+        prompts.append("Please show Bedroom 2.")
+    prompts.append("Please show the front outside view of your home.")
+    return prompts
+
+
 # ── Low-level helpers ─────────────────────────────────────────────────────────
 
 async def _send(ws: WebSocket, payload: dict) -> None:
@@ -217,19 +237,17 @@ async def _photo_phase(
 
 # ── PAN photo phase (with inline OCR validation + retry) ─────────────────────
 
-async def _pan_photo_phase(ws: WebSocket, session_id: str) -> Optional[dict]:
+async def _pan_photo_phase(ws: WebSocket, session_id: str, photo_index: int) -> Optional[dict]:
     """
     Capture the PAN card with up to fi_pan_max_attempts retries.
-    Runs AWS Textract inline after each capture; retries if required fields
-    (pan_number, name) are missing.  Returns {filename, ocr} or None.
+    Runs GPT-4o Vision OCR (falling back to Textract) after each capture.
+    Returns {filename, ocr} or None.
     """
-    from services.pan_service import extract_pan_data_sync
+    from services.pan_service import extract_pan_data
     from config import get_storage_root
 
     storage = get_storage_root() / session_id
     prompt  = settings.fi_pan_photo_prompt
-    # PAN is the last photo after selfie + room photos
-    photo_index = len(settings.fi_photo_prompts) + 1
 
     for attempt in range(1, settings.fi_pan_max_attempts + 1):
         await _send(ws, {"type": "announce_photo", "prompt": prompt, "is_selfie": False})
@@ -278,9 +296,10 @@ async def _pan_photo_phase(ws: WebSocket, session_id: str) -> Optional[dict]:
 
         ocr: dict = {}
         if pan_path.exists():
-            ocr = await asyncio.to_thread(extract_pan_data_sync, pan_path)
-        logger.info("[Conductor] PAN captured (attempt %d): pan=%s name=%s",
-                    attempt, ocr.get("pan_number", "?"), ocr.get("name", "?"))
+            ocr = await extract_pan_data(pan_path)
+        logger.info("[Conductor] PAN captured (attempt %d): pan=%s name=%s  source=%s",
+                    attempt, ocr.get("pan_number", "?"), ocr.get("name", "?"),
+                    ocr.get("source", "?"))
         return {"filename": filename, "ocr": ocr}
 
 
@@ -322,14 +341,21 @@ async def conduct_fi_session(ws: WebSocket, session_id: str) -> None:
         await _send(ws, {"type": "error", "message": "Handshake failed"})
         return
 
-    device_id   = ready_msg.get("device_id", "unknown")
-    basic_info  = ready_msg.get("basic_info", {})
-    device_info = ready_msg.get("device_info", {})
+    device_id     = ready_msg.get("device_id", "unknown")
+    basic_info    = ready_msg.get("basic_info", {})
+    device_info   = ready_msg.get("device_info", {})
+    property_info = ready_msg.get("property_info", {})
+    photo_prompts = _build_photo_prompts(property_info)
     logger.info(
-        "[Conductor] Handshake OK — device=%s  applicant=%s %s  client=%s %s",
+        "[Conductor] Handshake OK — device=%s  applicant=%s %s  client=%s %s  "
+        "property=%s bedrooms=%s hall=%s  photos=%d",
         device_id,
         basic_info.get("first_name", "?"), basic_info.get("last_name", ""),
         device_info.get("device_type", "?"), device_info.get("os", ""),
+        property_info.get("property_type", "?"),
+        property_info.get("bedrooms", "?"),
+        property_info.get("hall", "?"),
+        len(photo_prompts),
     )
 
     try:
@@ -378,12 +404,13 @@ async def conduct_fi_session(ws: WebSocket, session_id: str) -> None:
         # ── Self photo ────────────────────────────────────────────────────────
         await _photo_phase(ws, settings.fi_self_photo_prompt, is_selfie=True, photo_index=0)
 
-        # ── Room photos ───────────────────────────────────────────────────────
-        for idx, prompt in enumerate(settings.fi_photo_prompts):
+        # ── Room photos (list driven by property_info) ───────────────────────
+        for idx, prompt in enumerate(photo_prompts):
             await _photo_phase(ws, prompt, is_selfie=False, photo_index=idx + 1)
 
         # ── PAN card photo (with inline OCR retry) ───────────────────────────
-        await _pan_photo_phase(ws, session_id)
+        pan_photo_index = len(photo_prompts) + 1   # selfie=0, rooms=1..N, PAN=N+1
+        await _pan_photo_phase(ws, session_id, pan_photo_index)
 
         # ── Bank statement consent ────────────────────────────────────────────
         await _request_consent_phase(ws)

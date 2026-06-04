@@ -1,4 +1,5 @@
 import json
+import logging
 import aiofiles
 from datetime import datetime, timezone
 from pathlib import Path
@@ -6,6 +7,8 @@ from typing import Any, Dict, List, Optional
 
 from config import get_storage_root
 from models.fi_session import SessionMetadata
+
+logger = logging.getLogger(__name__)
 
 
 def _session_folder(session_id: str) -> Path:
@@ -20,6 +23,7 @@ async def save_file(session_id: str, filename: str, data: bytes) -> Path:
     dest = folder / filename
     async with aiofiles.open(dest, "wb") as f:
         await f.write(data)
+    logger.info("[Storage] Saved %s/%s  (%d bytes)", session_id, filename, len(data))
     return dest
 
 
@@ -38,6 +42,8 @@ async def save_response(case_id: str, filename: str, content: str) -> Path:
     dest = folder / filename
     async with aiofiles.open(dest, "w", encoding="utf-8") as f:
         await f.write(content)
+    logger.info("[Storage] Saved response %s/%s/responses/%s  (%d chars)",
+                case_id, case_id, filename, len(content))
     return dest
 
 

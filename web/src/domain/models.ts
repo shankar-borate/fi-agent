@@ -4,6 +4,12 @@ export interface GeoPoint {
   timestamp: string;
 }
 
+export interface PropertyInfo {
+  propertyType: 'flat' | 'bungalow';
+  bedrooms:     1 | 2 | 3;
+  hall:         0 | 1;
+}
+
 export interface BasicInfo {
   firstName:    string;
   lastName:     string;

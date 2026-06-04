@@ -4,9 +4,9 @@ import { FiApiClient }         from './data/FiApiClient';
 import { FiSessionRepository } from './data/FiSessionRepository';
 import { FiSessionController } from './ui/FiSessionController';
 import { FiSessionUI }         from './ui/FiSessionUI';
-import { FiConfig, initFiConfig } from './config/FiConfig';
+import { FiConfig } from './config/FiConfig';
 import { FiLog }               from './services/FiLog';
-import { BasicInfo }           from './domain/models';
+import { BasicInfo, PropertyInfo } from './domain/models';
 
 // ── Screen helpers ─────────────────────────────────────────────────────────
 
@@ -33,7 +33,8 @@ function getDeviceId(): string {
 
 // ── Form state ─────────────────────────────────────────────────────────────
 
-let capturedBasicInfo: BasicInfo | null = null;
+let capturedBasicInfo:    BasicInfo    | null = null;
+let capturedPropertyInfo: PropertyInfo | null = null;
 
 // ── Marketing screen ────────────────────────────────────────────────────────
 
@@ -125,9 +126,9 @@ document.getElementById('btnSendOTP')!.addEventListener('click', () => {
           }
         }, i * 200);   // stagger * appearance by 200ms each
       }
-    }, 5_000);   // 5s wait before OTP auto-fills
+    }, 1_000);   // 1s wait before OTP auto-fills
 
-  }, 2_000);   // 2s delay simulating SMS dispatch
+  }, 1_000);   // 1s delay simulating SMS dispatch
 });
 
 // Live loan amount hint
@@ -189,7 +190,19 @@ document.getElementById('loanForm')!.addEventListener('submit', (e) => {
     return;
   }
 
-  capturedBasicInfo = { firstName, lastName, dob, address, city, panNumber, mobileNumber, incomeRange, loanAmount };
+  // Property Info
+  const propertyType = get('propertyType') as 'flat' | 'bungalow';
+  const bedroomsRaw  = parseInt(get('bedrooms'), 10) as 1 | 2 | 3;
+  const hallRaw      = parseInt((document.getElementById('hall') as HTMLSelectElement).value, 10) as 0 | 1;
+
+  if (!propertyType) { showError('formError', 'Please select the type of property.'); return; }
+  if (!bedroomsRaw)  { showError('formError', 'Please select the number of bedrooms.'); return; }
+
+  capturedBasicInfo    = { firstName, lastName, dob, address, city, panNumber, mobileNumber, incomeRange, loanAmount };
+  capturedPropertyInfo = { propertyType, bedrooms: bedroomsRaw, hall: hallRaw };
+
+  const bedroomLabel  = `${bedroomsRaw} Bedroom${bedroomsRaw > 1 ? 's' : ''}`;
+  const propTypeLabel = propertyType === 'flat' ? 'Flat / Apartment' : 'Bungalow / House';
 
   // Populate review table
   const pairs: [string, string][] = [
@@ -201,6 +214,9 @@ document.getElementById('loanForm')!.addEventListener('submit', (e) => {
     ['Mobile Number',    mobileNumber],
     ['Annual Income',    incomeRange],
     ['Loan Amount',      `₹ ${loanAmount.toLocaleString('en-IN')}`],
+    ['Property Type',    propTypeLabel],
+    ['Bedrooms',         bedroomLabel],
+    ['Hall',             hallRaw === 1 ? 'Yes' : 'No'],
   ];
   const table = document.getElementById('reviewTable')!;
   table.innerHTML = pairs.map(([k, v]) =>
@@ -222,7 +238,7 @@ document.getElementById('btnBackToForm')!.addEventListener('click', () => {
 });
 
 document.getElementById('btnStartFI')!.addEventListener('click', () => {
-  if (!capturedBasicInfo) { hide('screenReview'); show('screenForm'); return; }
+  if (!capturedBasicInfo || !capturedPropertyInfo) { hide('screenReview'); show('screenForm'); return; }
   clearError('reviewError');
 
   // Route based on loan amount
@@ -240,7 +256,7 @@ document.getElementById('btnStartFI')!.addEventListener('click', () => {
   const btn = document.getElementById('btnStartFI') as HTMLButtonElement;
   btn.disabled    = true;
   btn.textContent = 'Starting…';
-  bootFI(capturedBasicInfo).catch(err => {
+  bootFI(capturedBasicInfo, capturedPropertyInfo).catch(err => {
     btn.disabled    = false;
     btn.textContent = 'Start Field Investigation';
     showError('reviewError', (err as Error).message);
@@ -263,14 +279,11 @@ document.getElementById('btnReduceAmount')!.addEventListener('click', () => {
 
 // ── FI boot ─────────────────────────────────────────────────────────────────
 
-async function bootFI(basicInfo: BasicInfo): Promise<void> {
+async function bootFI(basicInfo: BasicInfo, propertyInfo: PropertyInfo): Promise<void> {
   // Case ID: firstName_uuid8  (e.g. Ramesh_a3b4c5d6)
   const safeName = basicInfo.firstName.toLowerCase().replace(/[^a-z0-9]/g, '');
   const caseId   = `${safeName}_${crypto.randomUUID().substring(0, 8)}`;
   FiLog.i('Main', `Boot FI: case=${caseId}`);
-
-  await initFiConfig();
-  FiLog.i('Main', `Transcribe engine: ${FiConfig.transcribeEngine}`);
 
   hide('screenReview');
   show('session');
@@ -293,10 +306,10 @@ async function bootFI(basicInfo: BasicInfo): Promise<void> {
   const videoEl = document.getElementById('videoPreview') as HTMLVideoElement;
   const camera  = new CameraManager(videoEl);
   try {
-    await camera.start('environment');
+    await camera.start('user');
   } catch (e) {
-    FiLog.w('Main', `Back camera unavailable: ${(e as Error).message}`);
-    try { await camera.start('user'); } catch { FiLog.e('Main', 'Camera unavailable', e); }
+    FiLog.w('Main', `Front camera unavailable: ${(e as Error).message}`);
+    try { await camera.start('environment'); } catch { FiLog.e('Main', 'Camera unavailable', e); }
   }
 
   const sessionRecorder = new SessionRecorder();
@@ -310,6 +323,7 @@ async function bootFI(basicInfo: BasicInfo): Promise<void> {
     caseId,
     deviceId,
     basicInfo,
+    propertyInfo,
     audioStream,
     videoElement: videoEl,
     camera,
