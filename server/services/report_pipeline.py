@@ -355,18 +355,34 @@ class ReportPipeline:
         vault_root = Path(settings.fi_bank_vault_root)
         vault_pdfs: list[Path] = []
 
+        logger.info("[Pipeline] Bank vault root: '%s'  (exists=%s)", vault_root, vault_root.exists())
+        if vault_root.exists():
+            subdirs = [d.name for d in vault_root.iterdir() if d.is_dir()]
+            logger.info("[Pipeline] Vault subdirs: %s", subdirs[:20])
+
         if mobile:
-            vault_dir = vault_root / mobile
-            if vault_dir.exists():
-                vault_pdfs = sorted(vault_dir.glob("*.pdf"))
-                logger.info("[Pipeline] Vault %s — found %d PDF(s): %s",
-                            vault_dir, len(vault_pdfs),
-                            [p.name for p in vault_pdfs])
-            else:
-                logger.warning("[Pipeline] Vault folder not found for mobile %s: %s",
-                               mobile, vault_dir)
+            # Try both plain number and +91 prefix
+            candidates = [mobile, f"+91{mobile}", mobile.lstrip("+91")]
+            candidates = list(dict.fromkeys(c for c in candidates if c))  # dedupe
+
+            for candidate in candidates:
+                vault_dir = vault_root / candidate
+                logger.info("[Pipeline] Trying vault path: %s  (exists=%s)", vault_dir, vault_dir.exists())
+                if vault_dir.exists():
+                    vault_pdfs = sorted(vault_dir.glob("*.pdf"))
+                    logger.info("[Pipeline] Vault %s — found %d PDF(s): %s",
+                                vault_dir, len(vault_pdfs),
+                                [p.name for p in vault_pdfs])
+                    if vault_pdfs:
+                        break
+            if not vault_pdfs:
+                logger.warning(
+                    "[Pipeline] No PDF found in vault for mobile=%s  "
+                    "Tried paths: %s  — check FI_BANK_VAULT_ROOT in .env",
+                    mobile, [str(vault_root / c) for c in candidates],
+                )
         else:
-            logger.warning("[Pipeline] No mobile number — cannot look up vault")
+            logger.warning("[Pipeline] No mobile number in session — cannot look up vault")
 
         # ── 2. Fall back to uploaded document (legacy path) ───────────────
         if not vault_pdfs and self.meta.documents:
